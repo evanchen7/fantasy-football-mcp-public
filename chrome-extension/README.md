@@ -33,7 +33,7 @@ This does not require Chrome's **Load unpacked** feature:
 
 Firefox exposes a persistent **Fantasy Draft Assistant** sidebar. Open the recorder popup and select **Open Draft Assistant**, or use Firefox's sidebar menu. The recorder popup remains the place for scan, repair, export, and exact-session mock-reset controls; the sidebar is a read-only recommendation surface that stays open beside Yahoo. Chrome users can select **Full dashboard** in the popup instead.
 
-The sidebar selects a league only from the active Yahoo draft tab or an explicit league choice. It never silently falls back to the newest saved league. Select a strategy and use **Refresh recommendations** to request the top five options. Each card shows roster fit, rank/ADP/tier/bye context, reasoning, injury/news risk, an explicitly uncalibrated confidence, and explicitly uncalibrated heuristic/simulation probabilities. The panel also surfaces exact ledger blockers and prominently degrades stale state, inferred team counts, unresolved drafted identities, unavailable roster settings, and unknown injury/news data. It never injects UI into Yahoo and never selects or drafts a player.
+The sidebar selects a league only from the active Yahoo draft tab or an explicit league choice. It never silently falls back to the newest saved league. After the initial request, a recorded-state update for that exact selected league aborts any older in-flight request, waits for a 350 ms debounce, reloads the saved snapshot, and automatically requests fresh recommendations only when its timestamp advanced. Multiple storage events for one pick collapse into one request, and changes to another league do not trigger it. **Refresh recommendations** remains available at any time. Live sidebar requests keep the bounded 256-simulation setting. Each card shows roster fit, rank/ADP/tier/bye context, reasoning, injury/news risk, an explicitly uncalibrated confidence, and explicitly uncalibrated heuristic/simulation probabilities. The panel also surfaces exact ledger blockers and prominently degrades stale state, inferred team counts, unresolved drafted identities, unavailable roster settings, and unknown injury/news data. It never injects UI into Yahoo and never selects or drafts a player.
 
 For a wider board, open `http://127.0.0.1:8765/draft-dashboard` while the local server is running. The sidebar's dashboard link puts the explicitly selected league ID in a URL fragment, which browsers do not send in the HTTP request. The sidebar and dashboard share the same local client, response view-model, and safe text-only renderer; the dashboard may show up to twenty candidates without changing the recommendation contract.
 
@@ -47,10 +47,30 @@ The imported profile supplies rankings and league settings with no Yahoo API cal
 the extension continues supplying every live pick. Re-import it for the actual live
 session if earlier testing used a Yahoo mock draft.
 
+Each separate Yahoo mock has a new draft identity. To reuse the same board without
+uploading it again, open the new mock's **Full dashboard**, choose the prior entry under
+**Reuse a saved profile**, and select **Use for this mock & refresh**. No source is
+chosen automatically. Each choice shows its validated sport plus source date, falling
+back to its import date. The loopback server resolves the target sport and rejects a
+mismatched source; bounded list/bind timeouts keep a stalled local request from leaving
+the dashboard busy indefinitely. A successful bind copies only the sanitized rankings,
+roster settings, and source provenance onto the explicitly selected current identity;
+it never copies, merges, or replaces either mock's recorded picks. The dashboard then
+retries the recommendation immediately. **Reset mock draft** is for restarting the same
+Yahoo mock identity and continues preserving that identity's already-bound profile.
+
 If `FANTASY_PROS_API` is configured on the local server, recommendation cards also show
 allowlisted FantasyPros injury/news attribution and recent headlines. Provider calls
-remain server-side; the extension never receives the key. Missing, unresolved, stale,
-or API-tier-limited evidence is shown as unknown/limited rather than healthy.
+remain server-side; the extension never receives the key. Requests are serialized to
+the public one-per-second limit, cached, bounded, and backed off after rate limiting.
+Every outbound call also consumes one of this app's 95 persistent UTC-day
+reservations, a safety margin under the public 100-call daily ceiling that survives
+server restarts. Other applications using the same key still consume the provider's
+account-wide quota, so this local counter cannot guarantee remaining provider
+capacity. The private counter stores only schema/date/count metadata with user-only
+permissions. Missing, unresolved, stale, rate-limited, budget-exhausted,
+budget-unavailable, or API-tier-limited evidence is shown as unknown/limited rather
+than healthy.
 
 ## Mock-draft reset and ledger repair
 
