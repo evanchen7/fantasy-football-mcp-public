@@ -17,7 +17,13 @@ from src.services.databricks_advisory_critic import (
 )
 from src.services.fantasypros_provider import FantasyProsProvider
 from src.services.live_draft_store import LiveDraftValidationError, load_live_draft
-from src.services.local_draft_profile_store import load_local_draft_profile
+from src.services.local_draft_profile_store import (
+    LocalDraftProfileConflictError,
+    LocalDraftProfileNotFoundError,
+    LocalDraftProfileValidationError,
+    bind_default_local_draft_profile,
+    load_local_draft_profile,
+)
 
 ToolCaller = Callable[..., Awaitable[dict[str, Any]]]
 _YAHOO_RECOMMENDATION_LOCK = asyncio.Lock()
@@ -390,6 +396,21 @@ async def get_live_draft_recommendation(
         }
     analyzed_snapshot = _snapshot_binding(live_state)
     profile = load_local_draft_profile(live_state["draft"], path=profile_path)
+    if profile is None:
+        try:
+            profile = bind_default_local_draft_profile(
+                live_state["draft"], profile_path=profile_path
+            )
+        except (
+            LocalDraftProfileNotFoundError,
+            LocalDraftProfileConflictError,
+        ) as error:
+            raise LiveDraftValidationError(str(error)) from error
+        except LocalDraftProfileValidationError as error:
+            raise LiveDraftValidationError(
+                "The saved default draft profile is unavailable. Choose or clear it "
+                "in the local dashboard."
+            ) from error
     ranking_limit = max(25, min(int(ranking_count), 500))
     if profile is not None:
         raw_rankings = profile.get("rankings")

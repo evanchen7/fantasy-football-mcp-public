@@ -11,6 +11,13 @@ from src.agents.live_draft_recommender import LiveDraftRecommendationEngine
 from src.services.databricks_advisory_critic import DatabricksAdvisoryResult
 from src.services.live_draft_recommendation_service import get_live_draft_recommendation
 from src.services.live_draft_store import save_live_draft
+from src.services.local_draft_profile_store import (
+    LocalDraftProfileNotFoundError,
+    LocalDraftProfileValidationError,
+    load_local_draft_profile,
+    save_local_draft_profile,
+    set_default_local_draft_profile,
+)
 from tests.unit.test_live_draft_recommender import live_context, rankings
 
 
@@ -226,6 +233,179 @@ async def test_local_profile_avoids_yahoo_and_adds_fantasypros_evidence(
         item for item in result["recommendations"] if item["player"]["name"] == "De'Von Achane"
     )
     assert achane["risk"]["status"] == "questionable"
+
+
+@pytest.mark.asyncio
+async def test_unbound_recorder_draft_atomically_uses_same_sport_default_before_yahoo(
+    tmp_path: Path,
+) -> None:
+    live_path = tmp_path / "live-drafts.json"
+    profile_path = tmp_path / "draft-profiles.json"
+    save_live_draft(live_context(), live_path)
+    source = local_profile()
+    source["draft"] = {
+        "sport": "nfl",
+        "leagueId": "111",
+        "teamId": "3",
+        "sessionKey": "nfl:111",
+    }
+    source = save_local_draft_profile(source, profile_path)
+    set_default_local_draft_profile(
+        "nfl", "111", profile_path=profile_path
+    )
+    provider = FakeFantasyProsProvider(fantasypros_result(source))
+
+    async def no_yahoo(name: str, **arguments):
+        raise AssertionError(f"default profile must bind before Yahoo: {name}")
+
+    result = await get_live_draft_recommendation(
+        no_yahoo,
+        league_key=None,
+        league_id="10462193",
+        count=5,
+        simulations=0,
+        store_path=live_path,
+        profile_path=profile_path,
+        fantasypros_provider=provider,
+    )
+
+    assert result["status"] == "success"
+    assert result["leagueKey"] is None
+    bound = load_local_draft_profile(live_context()["draft"], profile_path)
+    assert bound is not None
+    assert bound["draft"] == live_context()["draft"]
+    assert bound["rankings"] == source["rankings"]
+    assert "picks" not in bound
+
+
+@pytest.mark.asyncio
+async def test_broken_default_fails_closed_before_yahoo(
+    tmp_path: Path, monkeypatch
+) -> None:
+    live_path = tmp_path / "live-drafts.json"
+    save_live_draft(live_context(), live_path)
+    yahoo_calls = []
+
+    monkeypatch.setattr(
+        recommendation_service,
+        "bind_default_local_draft_profile",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            LocalDraftProfileNotFoundError(
+                "default local draft profile source was not found"
+            )
+        ),
+        raising=False,
+    )
+
+    async def call_tool(name: str, **arguments):
+        yahoo_calls.append((name, arguments))
+        return {}
+
+    with pytest.raises(ValueError, match="default local draft profile source"):
+        await get_live_draft_recommendation(
+            call_tool,
+            league_key=None,
+            league_id="10462193",
+            simulations=0,
+            store_path=live_path,
+            profile_path=tmp_path / "draft-profiles.json",
+        )
+
+    assert yahoo_calls == []
+
+
+@pytest.mark.asyncio
+async def test_rollover_default_fails_closed_before_yahoo_or_target_binding(
+    tmp_path: Path, monkeypatch
+) -> None:
+    live_path = tmp_path / "live-drafts.json"
+    profile_path = tmp_path / "draft-profiles.json"
+    defaults_path = tmp_path / "draft-profile-defaults.json"
+    save_live_draft(live_context(), live_path)
+    source = local_profile()
+    source["draft"] = {
+        "sport": "nfl",
+        "leagueId": "111",
+        "teamId": "3",
+        "sessionKey": "nfl:111",
+    }
+    save_local_draft_profile(source, profile_path)
+    set_default_local_draft_profile(
+        "nfl",
+        "111",
+        profile_path=profile_path,
+        defaults_path=defaults_path,
+        current_season=2026,
+    )
+    original_bind = recommendation_service.bind_default_local_draft_profile
+    yahoo_calls = []
+
+    monkeypatch.setattr(
+        recommendation_service,
+        "bind_default_local_draft_profile",
+        lambda *args, **kwargs: original_bind(
+            *args, **kwargs, defaults_path=defaults_path, current_season=2027
+        ),
+    )
+
+    async def call_tool(name: str, **arguments):
+        yahoo_calls.append((name, arguments))
+        return {}
+
+    with pytest.raises(
+        ValueError, match=r"season 2026.*current UTC season 2027"
+    ):
+        await get_live_draft_recommendation(
+            call_tool,
+            league_key=None,
+            league_id="10462193",
+            simulations=0,
+            store_path=live_path,
+            profile_path=profile_path,
+        )
+
+    assert yahoo_calls == []
+    assert load_local_draft_profile(live_context()["draft"], profile_path) is None
+
+
+@pytest.mark.asyncio
+async def test_invalid_default_store_error_is_sanitized_before_yahoo(
+    tmp_path: Path, monkeypatch
+) -> None:
+    live_path = tmp_path / "live-drafts.json"
+    save_live_draft(live_context(), live_path)
+    private_detail = "secret token at /Users/private/draft-profile-defaults.json"
+    yahoo_calls = []
+
+    monkeypatch.setattr(
+        recommendation_service,
+        "bind_default_local_draft_profile",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            LocalDraftProfileValidationError(private_detail)
+        ),
+        raising=False,
+    )
+
+    async def call_tool(name: str, **arguments):
+        yahoo_calls.append((name, arguments))
+        return {}
+
+    with pytest.raises(ValueError) as captured:
+        await get_live_draft_recommendation(
+            call_tool,
+            league_key=None,
+            league_id="10462193",
+            simulations=0,
+            store_path=live_path,
+            profile_path=tmp_path / "draft-profiles.json",
+        )
+
+    assert str(captured.value) == (
+        "The saved default draft profile is unavailable. Choose or clear it "
+        "in the local dashboard."
+    )
+    assert private_detail not in str(captured.value)
+    assert yahoo_calls == []
 
 
 @pytest.mark.asyncio

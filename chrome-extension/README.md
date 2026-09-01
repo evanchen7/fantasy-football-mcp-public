@@ -120,16 +120,18 @@ With an exact local profile, recommendations use the imported rankings and setti
 
 ## Instant Mock Drafts and profile reuse
 
-Yahoo Instant Mock Drafts use the normal scan/sync flow. Scan first and bind a local profile before requesting advice. If the dashboard says the Yahoo league identity could not be resolved, use the local-profile path; refreshing OAuth is not a fix for a mock that Yahoo's Fantasy API does not list as a league.
+Yahoo Instant Mock Drafts use the normal scan/sync flow. Scan first and bind a local profile or configure a per-sport default before requesting advice. If the dashboard says the Yahoo league identity could not be resolved, use the local-profile path; refreshing OAuth is not a fix for a mock that Yahoo's Fantasy API does not list as a league.
 
 Each newly created mock has a new identity. To reuse rankings without uploading them again:
 
 1. Open and scan the new mock.
 2. Open **Full dashboard** from the new mock's popup.
 3. Under **Reuse a saved profile**, explicitly choose the prior source.
-4. Select **Use for this mock & refresh**.
+4. Select **Use for this draft & refresh**.
 
-No source is chosen automatically. The server validates the sport and copies only sanitized rankings, roster settings, and provenance. It never copies or merges either mock's picks.
+For repeated mocks, the dashboard's **Default for future drafts** form can store one explicit saved source per sport. A first recommendation for a new profileless recorder identity binds that source before Yahoo fallback. Existing exact profiles always win, changing or clearing the default affects only future unbound drafts, and the server copies only sanitized rankings, roster settings, and provenance—never picks. The source must match the current UTC year when selected and when bound; replace or clear it after a season rollover.
+
+Yahoo uses the same draft-client URL shape for mocks and real drafts, so the extension cannot safely infer mock status without retaining unreliable page data. The sport default therefore applies to future profileless real drafts as well as mocks. The dashboard labels that scope; keep manual binding if your Yahoo leagues use different settings.
 
 ## Reset versus ledger repair
 
@@ -215,7 +217,7 @@ The current extension avoids Firefox's content-script Promise boundary by serial
 
 - Open and rescan the exact active tab rather than choosing a latest saved draft.
 - Open the dashboard from that popup so its league ID is selected.
-- For an Instant Mock Draft or unavailable Yahoo API, import or explicitly bind a saved local profile, then refresh. This path should make zero Yahoo calls.
+- For an Instant Mock Draft or unavailable Yahoo API, import, explicitly bind, or configure a saved local profile as the sport default, then refresh. This path should make zero Yahoo calls.
 - For a normal league using Yahoo fallback, first verify `ff_get_leagues` returns the matching league and authenticated team.
 
 ### Popup reports ledger defects

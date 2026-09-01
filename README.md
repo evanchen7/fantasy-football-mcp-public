@@ -151,16 +151,20 @@ When using Yahoo fallback instead of a local profile, a validated Yahoo `league_
 
 ## Instant Mock Drafts and repeated mocks
 
-Yahoo Instant Mock Drafts use the same recorder flow. Scan the exact mock first, then import a local profile or explicitly bind a saved one before requesting advice. If an Instant Mock Draft identity is not discoverable through Yahoo's Fantasy API, this local-profile path is the expected recovery; refreshing an OAuth token does not make that mock a normal Yahoo league.
+Yahoo Instant Mock Drafts use the same recorder flow. Scan the exact mock first, then import a local profile, explicitly bind a saved one, or configure a per-sport default before requesting advice. If an Instant Mock Draft identity is not discoverable through Yahoo's Fantasy API, this local-profile path is the expected recovery; refreshing an OAuth token does not make that mock a normal Yahoo league.
 
 Each newly created Yahoo mock has a new identity. To reuse the same rankings without uploading them again:
 
 1. Open and scan the new mock.
 2. Open **Full dashboard** from its popup.
 3. Under **Reuse a saved profile**, choose the prior source yourself.
-4. Select **Use for this mock & refresh**.
+4. Select **Use for this draft & refresh**.
 
 Only sanitized rankings, roster settings, and provenance are copied. Picks are never copied between mocks.
+
+To remove that manual step for later mocks, use **Default for future drafts** in the dashboard. Choose **Yahoo Football**, select the saved source, and select **Set sport default**. On the first recommendation for a newly synced draft with no exact profile, the server atomically binds that default to the new identity and continues without a Yahoo API call. An already bound or imported exact profile always wins, and changing or clearing the default does not alter prior drafts. Default selection and automatic binding require a source profile for the current UTC year, so import a new sheet and replace or clear the pointer after a season rollover.
+
+Yahoo's draft-client URL does not reliably distinguish a mock from a real draft, and the recorder intentionally discards its query string. The default therefore applies to every future profileless recorder draft for that sport, including real drafts and mocks. The dashboard states this scope before you enable it; use manual binding instead if you draft in multiple leagues with different settings.
 
 Use the two popup recovery controls for different jobs:
 
@@ -277,7 +281,7 @@ This was associated with stale recorder code using Firefox's content-script Prom
 ### “Yahoo league identity could not be resolved”
 
 - First open the exact active draft tab and rescan so the popup and server agree on its numeric league ID.
-- For an Instant Mock Draft or while Yahoo approval is pending, open the dashboard from that popup and import or explicitly bind a saved local profile. Then refresh recommendations; this path should not call Yahoo.
+- For an Instant Mock Draft or while Yahoo approval is pending, open the dashboard from that popup and import, explicitly bind, or configure a saved local profile as the Yahoo Football default. Then refresh recommendations; this path should not call Yahoo.
 - For a real Yahoo league using fallback, confirm `ff_get_leagues` returns exactly one matching current-season league and that the authenticated Yahoo team matches the draft.
 - Do not choose the newest saved session by guesswork or copy a league ID from a different mock.
 
@@ -302,6 +306,7 @@ Private runtime data is stored under `~/.fantasy-football-mcp/`. The default dir
 
 - `live-drafts.json` — sanitized per-league draft sessions
 - `draft-profiles.json` — sanitized rankings, roster settings, and profile provenance
+- `draft-profile-defaults.json` — explicit per-sport pointers to saved default profiles
 - `fantasypros-snapshots.sqlite3` — normalized FantasyPros base snapshots only
 - `fantasypros-request-budget.json` — only UTC date and request count
 
