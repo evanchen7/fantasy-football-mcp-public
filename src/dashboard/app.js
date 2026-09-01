@@ -4,11 +4,14 @@
   const client = globalThis.YahooDraftRecommendationClient;
   const viewModels = globalThis.YahooDraftRecommendationViewModel;
   const renderer = globalThis.YahooDraftRecommendationRenderer;
+  const profileClient = globalThis.YahooDraftProfileClient;
   const form = document.getElementById('recommendation-form');
+  const profileForm = document.getElementById('draft-profile-form');
   const leagueInput = document.getElementById('league-id');
   const requestStatus = document.getElementById('request-status');
   const recommendationView = document.getElementById('recommendation-view');
   const formControls = [...form.elements];
+  const profileControls = [...profileForm.elements];
 
   function clear(node) {
     node.replaceChildren();
@@ -58,9 +61,55 @@
     });
   }
 
+  function setProfileControlsDisabled(disabled) {
+    profileControls.forEach((control) => {
+      control.disabled = disabled;
+    });
+  }
+
   function setStatus(message, kind) {
     requestStatus.textContent = message;
     requestStatus.className = `request-status ${kind}`;
+  }
+
+  function setProfileStatus(title, detail, freshness) {
+    const status = document.getElementById('profile-source-status');
+    document.getElementById('profile-source-title').textContent = title;
+    document.getElementById('profile-source-detail').textContent = detail;
+    document.getElementById('profile-freshness').textContent = freshness.label;
+    status.className = `profile-source-status ${freshness.kind}`;
+  }
+
+  function selectedRosterPositions() {
+    const values = {};
+    profileForm.querySelectorAll('[data-roster-position]').forEach((input) => {
+      values[input.dataset.rosterPosition] = input.value;
+    });
+    return profileClient.parseRosterPositions(values);
+  }
+
+  function selectedLeagueSettings() {
+    return {
+      teams: document.getElementById('profile-team-count').value,
+      rosterPositions: selectedRosterPositions(),
+    };
+  }
+
+  function isXlsxFile(file) {
+    const name = typeof file?.name === 'string' ? file.name.toLowerCase() : '';
+    return name.endsWith('.xlsx') || file?.type === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+  }
+
+  function profileSourceTitle(format) {
+    if (format === 'draftsheets-2026' || format === 'xlsx') return 'DraftSheets profile imported';
+    if (format === 'json') return 'Local JSON profile imported';
+    return 'Local CSV profile imported';
+  }
+
+  function safeResponseCount(value, fallback) {
+    return Number.isInteger(value) && value > 0 && value <= profileClient.MAX_PROFILE_RANKINGS
+      ? value
+      : fallback;
   }
 
   function prefillLeagueFromFragment() {
@@ -243,13 +292,89 @@
     renderer.renderRecommendationView(recommendationView, model);
   }
 
+  profileForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    if (!profileForm.reportValidity() || !form.reportValidity()) return;
+    const leagueId = leagueInput.value.trim();
+    const fileInput = document.getElementById('draft-profile-file');
+    const file = fileInput.files?.[0];
+    if (!file) {
+      setProfileStatus(
+        'Profile import failed',
+        'Choose a supported DraftSheets, CSV, or JSON file.',
+        { kind: 'error', label: 'Source date unknown' },
+      );
+      return;
+    }
+
+    setControlsDisabled(true);
+    setProfileControlsDisabled(true);
+    setProfileStatus(
+      'Importing local profile…',
+      `Validating rankings and binding them to league ${leagueId}.`,
+      { kind: 'loading', label: 'Source freshness pending' },
+    );
+    try {
+      let result;
+      let format;
+      let countFallback = null;
+      let asOf = null;
+      let truncatedCount = 0;
+      if (isXlsxFile(file)) {
+        result = await profileClient.saveDraftProfileXlsx(file, leagueId, {
+          leagueSettings: selectedLeagueSettings(),
+        });
+        format = 'xlsx';
+        asOf = typeof result.asOf === 'string' ? result.asOf : null;
+      } else {
+        if (Number(file.size) > 2_000_000) {
+          throw new Error('The ranking file must be 2 MB or smaller.');
+        }
+        const parsed = profileClient.parseDraftProfileFile(await file.text(), file.name);
+        format = parsed.format;
+        countFallback = parsed.rankings.length;
+        truncatedCount = parsed.truncatedCount;
+        asOf = document.getElementById('profile-as-of').value || parsed.asOf || null;
+        result = await profileClient.saveDraftProfile({
+          leagueId,
+          format,
+          asOf,
+          rankings: parsed.rankings,
+          leagueSettings: selectedLeagueSettings(),
+        });
+      }
+      if (leagueInput.value.trim() !== leagueId) {
+        throw new Error('League selection changed during import; verify the active profile before drafting.');
+      }
+      const rankingCount = safeResponseCount(result.rankingCount, countFallback);
+      const detailParts = [
+        rankingCount ? `${rankingCount} ranked players` : 'Ranked players saved',
+        `bound to league ${leagueId}`,
+      ];
+      if (truncatedCount) detailParts.push(`top 500 retained; ${truncatedCount} lower ranks omitted`);
+      const freshness = profileClient.describeProfileFreshness(result.asOf || asOf);
+      setProfileStatus(profileSourceTitle(format), detailParts.join(' · '), freshness);
+      fileInput.value = '';
+    } catch (error) {
+      setProfileStatus(
+        'Profile import failed',
+        String(error?.message || 'The local draft profile could not be imported.').slice(0, 240),
+        { kind: 'error', label: 'No profile change was confirmed' },
+      );
+    } finally {
+      setControlsDisabled(false);
+      setProfileControlsDisabled(false);
+    }
+  });
+
   form.addEventListener('submit', async (event) => {
     event.preventDefault();
     if (!form.reportValidity()) return;
     const leagueId = leagueInput.value.trim();
     resetAnalysisPanels();
     setControlsDisabled(true);
-    setStatus('Refreshing Yahoo context and running bounded specialist scoring…', 'loading');
+    setProfileControlsDisabled(true);
+    setStatus('Refreshing live context and running bounded specialist scoring…', 'loading');
     try {
       const data = await client.fetchDraftRecommendationsForLeagueId(leagueId, {
         endpoint: '/draft-recommendation',
@@ -267,13 +392,14 @@
       setStatus(...requestStatusForModel(model, leagueId));
     } catch (error) {
       const message = error?.name === 'AbortError'
-        ? 'Recommendation timed out. Confirm the loopback server and Yahoo authentication, then retry.'
+        ? 'Recommendation timed out. Confirm the loopback server and selected ranking source, then retry.'
         : String(error?.message || 'Recommendation unavailable.');
       resetAnalysisPanels();
       renderClientError(message, leagueId);
       setStatus(message, 'error');
     } finally {
       setControlsDisabled(false);
+      setProfileControlsDisabled(false);
     }
   });
 
@@ -281,6 +407,14 @@
     setStatus('Shared recommendation UI modules are unavailable.', 'error');
     setControlsDisabled(true);
     return;
+  }
+  if (!profileClient) {
+    setProfileStatus(
+      'Local profile import unavailable',
+      'The dashboard profile module did not load.',
+      { kind: 'error', label: 'Source date unknown' },
+    );
+    setProfileControlsDisabled(true);
   }
   prefillLeagueFromFragment();
 }());

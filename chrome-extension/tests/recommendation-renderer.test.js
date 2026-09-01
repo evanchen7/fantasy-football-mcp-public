@@ -54,6 +54,8 @@ test('renders all server-provided content as inert text with accessible structur
       scenarioProbabilityLabel: 'Scenario survival 42% · uncalibrated simulation',
       rosterImpact: malicious,
       riskLabel: 'Injury/news: unknown — not assumed healthy',
+      riskSourceLabel: 'Source: FantasyPros · updated 2026-09-01T22:15:00Z',
+      recentNews: [malicious],
       reasoning: [malicious],
     }],
     contingency: ['If unavailable: Player 2'],
@@ -66,6 +68,7 @@ test('renders all server-provided content as inert text with accessible structur
   assert.equal(findAll(root, (node) => node.tagName === 'section').length >= 3, true);
   assert.equal(findAll(root, (node) => node.tagName === 'h2').length >= 2, true);
   assert.equal(root.attributes['aria-live'], 'polite');
+  assert.equal(findAll(root, (node) => node.className === 'news-list').length, 1);
 });
 
 test('renders exact blocker details and an empty-state instead of player cards', () => {

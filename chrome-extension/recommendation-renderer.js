@@ -50,6 +50,15 @@
     card.appendChild(metrics);
     card.appendChild(element(documentRef, 'p', 'roster-impact', recommendation.rosterImpact));
     card.appendChild(element(documentRef, 'p', 'risk-label', recommendation.riskLabel));
+    if (recommendation.riskSourceLabel) {
+      card.appendChild(element(documentRef, 'p', 'risk-source', recommendation.riskSourceLabel));
+    }
+    if (recommendation.recentNews?.length) {
+      const news = element(documentRef, 'section', 'recent-news');
+      news.appendChild(element(documentRef, 'h4', '', 'Recent FantasyPros news'));
+      news.appendChild(list(documentRef, recommendation.recentNews, 'news-list'));
+      card.appendChild(news);
+    }
     if (recommendation.reasoning.length) {
       card.appendChild(list(documentRef, recommendation.reasoning, 'reasoning-list'));
     }

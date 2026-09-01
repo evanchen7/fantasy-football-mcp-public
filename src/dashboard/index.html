@@ -8,6 +8,7 @@
     <script src="/draft-dashboard/shared/recommendation-client.js" defer></script>
     <script src="/draft-dashboard/shared/recommendation-view-model.js" defer></script>
     <script src="/draft-dashboard/shared/recommendation-renderer.js" defer></script>
+    <script src="/draft-dashboard/draft-profile-client.js" defer></script>
     <script src="/draft-dashboard/app.js" defer></script>
   </head>
   <body>
@@ -30,7 +31,7 @@
             <p class="eyebrow">Recommendation controls</p>
             <h2 id="controls-title">Choose the active league</h2>
           </div>
-          <p class="hint">The league ID must match one unambiguous recorder session and one Yahoo league.</p>
+          <p class="hint">The league ID must match one unambiguous recorder session. Yahoo access is needed only when no matching local profile exists.</p>
         </div>
         <form id="recommendation-form">
           <label class="wide-field">
@@ -64,6 +65,61 @@
           </label>
           <button id="refresh-button" type="submit">Refresh analysis</button>
         </form>
+      </section>
+
+      <section class="profile-panel" aria-labelledby="profile-title">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">API-free ranking source</p>
+            <h2 id="profile-title">Local draft profile</h2>
+          </div>
+          <p class="hint">Bind rankings and league settings to the league ID above. Drafted players still come from the live Firefox recorder.</p>
+        </div>
+        <form id="draft-profile-form" class="profile-form">
+          <label class="profile-file-field">
+            <span>Draft profile</span>
+            <input
+              id="draft-profile-file"
+              name="draftProfile"
+              type="file"
+              required
+              accept=".xlsx,.csv,.json,text/csv,application/json,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            >
+          </label>
+          <label>
+            <span>Source date (CSV/JSON)</span>
+            <input id="profile-as-of" name="asOf" type="date">
+          </label>
+          <label>
+            <span>League teams</span>
+            <input id="profile-team-count" name="teams" type="number" min="2" max="20" value="12" required>
+          </label>
+          <button id="import-profile-button" type="submit">Import profile</button>
+
+          <fieldset class="roster-fieldset">
+            <legend>Roster slots</legend>
+            <div class="roster-slot-grid">
+              <label><span>QB</span><input data-roster-position="QB" type="number" min="0" max="30" value="1" required></label>
+              <label><span>RB</span><input data-roster-position="RB" type="number" min="0" max="30" value="2" required></label>
+              <label><span>WR</span><input data-roster-position="WR" type="number" min="0" max="30" value="2" required></label>
+              <label><span>TE</span><input data-roster-position="TE" type="number" min="0" max="30" value="1" required></label>
+              <label><span>FLEX</span><input data-roster-position="FLEX" type="number" min="0" max="30" value="1" required></label>
+              <label><span>K</span><input data-roster-position="K" type="number" min="0" max="30" value="1" required></label>
+              <label><span>DST</span><input data-roster-position="DST" type="number" min="0" max="30" value="1" required></label>
+              <label><span>Bench</span><input data-roster-position="BN" type="number" min="0" max="30" value="6" required></label>
+              <label><span>IR</span><input data-roster-position="IR" type="number" min="0" max="30" value="1" required></label>
+            </div>
+          </fieldset>
+        </form>
+        <div class="profile-help">
+          <p><strong>Supported:</strong> DraftSheets .xlsx, or the ECR tab exported as CSV, plus schemaVersion 1 JSON. DraftSheets imports use the top 500 players by overall rank.</p>
+          <p>CSV and JSON are reduced to allowlisted ranking fields in your browser. XLSX bytes go only to the bounded loopback parser and are never stored; filenames, URLs, notes, and arbitrary cells are not persisted.</p>
+        </div>
+        <div id="profile-source-status" class="profile-source-status unknown" role="status" aria-live="polite">
+          <strong id="profile-source-title">No local profile imported</strong>
+          <span id="profile-source-detail">Recommendations require a league-bound ranking profile while Yahoo API access is unavailable.</span>
+          <span id="profile-freshness">Source date unknown</span>
+        </div>
       </section>
 
       <div id="request-status" class="request-status idle" role="status" aria-live="polite">

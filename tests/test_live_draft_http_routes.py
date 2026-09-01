@@ -20,6 +20,7 @@ def request_for(
     ui_header: str | None = "1",
     content_length: str | None = None,
     host: str = "127.0.0.1:8765",
+    extra_headers: dict[str, str] | None = None,
 ) -> Request:
     encoded = body if body is not None else json.dumps(payload if payload is not None else {}).encode()
     headers = [(b"host", host.encode())]
@@ -29,6 +30,8 @@ def request_for(
         headers.append((b"content-type", content_type.encode()))
     if ui_header is not None:
         headers.append((b"x-fantasy-draft-ui", ui_header.encode()))
+    for name, value in (extra_headers or {}).items():
+        headers.append((name.lower().encode(), value.encode()))
     length = str(len(encoded)) if content_length is None else content_length
     headers.append((b"content-length", length.encode()))
     sent = False
@@ -59,6 +62,312 @@ def request_for(
 
 def response_json(response) -> dict:
     return json.loads(response.body)
+
+
+def live_state_for_profile() -> dict:
+    return {
+        "schemaVersion": 1,
+        "source": "yahoo-draft-recorder",
+        "generatedAt": "2026-09-01T16:00:00Z",
+        "draft": {
+            "sport": "nfl",
+            "leagueId": "498589",
+            "teamId": "6",
+            "sessionKey": "nfl:498589",
+        },
+        "picks": [],
+    }
+
+
+def structured_profile_payload() -> dict:
+    return {
+        "schemaVersion": 1,
+        "leagueId": "498589",
+        "importedAt": "2026-09-01T16:00:00Z",
+        "format": "csv",
+        "asOf": "2026-09-01T12:00:00Z",
+        "rankings": [
+            {"name": "Player One", "position": "RB", "team": "SF", "rank": 1},
+            {"name": "Player Two", "position": "WR", "rank": 2},
+        ],
+        "leagueSettings": {
+            "teams": 12,
+            "rosterPositions": [
+                {"position": "QB", "count": 1},
+                {"position": "RB", "count": 2},
+                {"position": "WR", "count": 2},
+                {"position": "TE", "count": 1},
+                {"position": "FLEX", "count": 1},
+                {"position": "K", "count": 1},
+                {"position": "DST", "count": 1},
+                {"position": "BN", "count": 6},
+                {"position": "IR", "count": 1},
+            ],
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_structured_profile_route_binds_live_identity_and_saves_allowlist(
+    monkeypatch,
+) -> None:
+    saved = []
+    monkeypatch.setattr(
+        fastmcp_server,
+        "load_live_draft",
+        lambda **arguments: live_state_for_profile(),
+    )
+    monkeypatch.setattr(
+        fastmcp_server,
+        "save_local_draft_profile",
+        lambda profile: saved.append(profile) or profile,
+    )
+
+    response = await fastmcp_server.receive_draft_profile(
+        request_for("POST", "/draft-profile", payload=structured_profile_payload())
+    )
+
+    assert response.status_code == 200
+    assert response_json(response) == {
+        "status": "success",
+        "leagueId": "498589",
+        "rankingCount": 2,
+        "asOf": "2026-09-01",
+        "format": "csv",
+    }
+    assert saved == [
+        {
+            "schemaVersion": 1,
+            "source": "local-draft-profile",
+            "season": 2026,
+            "importedAt": "2026-09-01T16:00:00Z",
+            "draft": live_state_for_profile()["draft"],
+            "rankings": structured_profile_payload()["rankings"],
+            "leagueSettings": structured_profile_payload()["leagueSettings"],
+            "provenance": {
+                "kind": "user-import",
+                "format": "csv",
+                "asOf": "2026-09-01",
+            },
+        }
+    ]
+    assert response.headers["cache-control"] == "no-store"
+
+
+@pytest.mark.asyncio
+async def test_xlsx_profile_route_uses_strict_identity_and_roster_headers(
+    monkeypatch,
+) -> None:
+    calls = []
+    saved = []
+    workbook = b"PK\x03\x04bounded-workbook"
+    parsed = {
+        "schemaVersion": 1,
+        "source": "local-draft-profile",
+        "season": 2026,
+        "importedAt": "2026-09-01T16:00:00Z",
+        "draft": live_state_for_profile()["draft"],
+        "rankings": [{"name": "Player One", "position": "RB", "team": "SF", "rank": 1}],
+        "leagueSettings": {
+            "teams": 10,
+            "rosterPositions": [{"position": "QB", "count": 1}],
+        },
+        "provenance": {
+            "kind": "user-import",
+            "format": "draftsheets-2026",
+            "asOf": "2026-08-31",
+        },
+    }
+
+    monkeypatch.setattr(
+        fastmcp_server,
+        "load_live_draft",
+        lambda **arguments: live_state_for_profile(),
+    )
+
+    def parse(body, **arguments):
+        calls.append((body, arguments))
+        return parsed
+
+    monkeypatch.setattr(fastmcp_server, "profile_from_draftsheets_xlsx", parse)
+    monkeypatch.setattr(
+        fastmcp_server,
+        "save_local_draft_profile",
+        lambda profile: saved.append(profile) or profile,
+    )
+
+    response = await fastmcp_server.receive_draft_profile_xlsx(
+        request_for(
+            "POST",
+            "/draft-profile-xlsx",
+            body=workbook,
+            content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            extra_headers={
+                "X-Fantasy-League-ID": "498589",
+                "X-Fantasy-Team-Count": "12",
+                "X-Fantasy-Roster-Positions": (
+                    "QB=1,RB=2,WR=2,TE=1,FLEX=1,K=1,DST=1,BN=6,IR=1"
+                ),
+            },
+        )
+    )
+
+    assert response.status_code == 200
+    assert response_json(response) == {
+        "status": "success",
+        "leagueId": "498589",
+        "rankingCount": 1,
+        "asOf": "2026-08-31",
+        "format": "draftsheets-2026",
+    }
+    assert calls[0][0] == workbook
+    assert calls[0][1]["draft"] == live_state_for_profile()["draft"]
+    assert calls[0][1]["season"] == 2026
+    assert calls[0][1]["roster_overrides"] == {
+        "QB": 1,
+        "RB": 2,
+        "WR": 2,
+        "TE": 1,
+        "FLEX": 1,
+        "K": 1,
+        "DST": 1,
+        "BN": 6,
+        "IR": 1,
+    }
+    assert saved[0]["leagueSettings"] == {
+        "teams": 12,
+        "rosterPositions": [
+            {"position": "QB", "count": 1},
+            {"position": "RB", "count": 2},
+            {"position": "WR", "count": 2},
+            {"position": "TE", "count": 1},
+            {"position": "FLEX", "count": 1},
+            {"position": "K", "count": 1},
+            {"position": "DST", "count": 1},
+            {"position": "BN", "count": 6},
+            {"position": "IR", "count": 1},
+        ],
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("changes", "status", "message"),
+    [
+        ({"client": "192.168.1.2"}, 403, "Loopback"),
+        ({"origin": "https://evil.example"}, 403, "Origin"),
+        ({"ui_header": None}, 403, "UI header"),
+        ({"content_type": "application/json"}, 415, "Content-Type"),
+        ({"content_length": "2000001"}, 413, "too large"),
+        ({"extra_headers": {}}, 400, "league"),
+        (
+            {
+                "extra_headers": {
+                    "X-Fantasy-League-ID": "498589",
+                    "X-Fantasy-Team-Count": "12",
+                    "X-Fantasy-Roster-Positions": "QB=1,QB=2",
+                }
+            },
+            400,
+            "roster",
+        ),
+    ],
+)
+async def test_xlsx_profile_route_rejects_unsafe_or_malformed_requests(
+    monkeypatch, changes, status, message
+) -> None:
+    monkeypatch.setattr(
+        fastmcp_server,
+        "profile_from_draftsheets_xlsx",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("must not parse")),
+    )
+    defaults = {
+        "body": b"PK\x03\x04data",
+        "content_type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "extra_headers": {
+            "X-Fantasy-League-ID": "498589",
+            "X-Fantasy-Team-Count": "12",
+            "X-Fantasy-Roster-Positions": "QB=1,RB=2",
+        },
+    }
+    defaults.update(changes)
+
+    response = await fastmcp_server.receive_draft_profile_xlsx(
+        request_for("POST", "/draft-profile-xlsx", **defaults)
+    )
+
+    assert response.status_code == status
+    assert message.lower() in response_json(response)["message"].lower()
+
+
+@pytest.mark.asyncio
+async def test_profile_route_never_accepts_unbound_or_cross_league_import(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(fastmcp_server, "load_live_draft", lambda **arguments: None)
+    monkeypatch.setattr(
+        fastmcp_server,
+        "save_local_draft_profile",
+        lambda profile: (_ for _ in ()).throw(AssertionError("must not save")),
+    )
+
+    response = await fastmcp_server.receive_draft_profile(
+        request_for("POST", "/draft-profile", payload=structured_profile_payload())
+    )
+
+    assert response.status_code == 404
+    assert "synced" in response_json(response)["message"].lower()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route_name", ["structured", "xlsx"])
+async def test_profile_routes_sanitize_unexpected_parser_or_storage_failures(
+    monkeypatch, route_name
+) -> None:
+    private_detail = "secret token at /Users/private/draft-profiles.json"
+    monkeypatch.setattr(
+        fastmcp_server,
+        "load_live_draft",
+        lambda **arguments: live_state_for_profile(),
+    )
+    if route_name == "structured":
+        monkeypatch.setattr(
+            fastmcp_server,
+            "save_local_draft_profile",
+            lambda profile: (_ for _ in ()).throw(OSError(private_detail)),
+        )
+        request = request_for(
+            "POST", "/draft-profile", payload=structured_profile_payload()
+        )
+        response = await fastmcp_server.receive_draft_profile(request)
+    else:
+        monkeypatch.setattr(
+            fastmcp_server,
+            "profile_from_draftsheets_xlsx",
+            lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError(private_detail)),
+        )
+        request = request_for(
+            "POST",
+            "/draft-profile-xlsx",
+            body=b"PK\x03\x04bounded-workbook",
+            content_type=(
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            ),
+            extra_headers={
+                "X-Fantasy-League-ID": "498589",
+                "X-Fantasy-Team-Count": "12",
+                "X-Fantasy-Roster-Positions": "QB=1,RB=2",
+            },
+        )
+        response = await fastmcp_server.receive_draft_profile_xlsx(request)
+
+    assert response.status_code == 500
+    assert response_json(response) == {
+        "status": "error",
+        "message": "Draft profile service unavailable",
+    }
+    assert private_detail.encode() not in response.body
+    assert response.headers["cache-control"] == "no-store"
 
 
 @pytest.mark.asyncio
@@ -359,6 +668,15 @@ async def test_dashboard_assets_are_loopback_only_and_no_store() -> None:
             "GET", "/draft-dashboard/app.js", body=b"", content_type=None, ui_header=None
         )
     )
+    profile_client = await fastmcp_server.serve_draft_profile_client(
+        request_for(
+            "GET",
+            "/draft-dashboard/draft-profile-client.js",
+            body=b"",
+            content_type=None,
+            ui_header=None,
+        )
+    )
     shared = await fastmcp_server.serve_draft_recommendation_client(
         request_for(
             "GET",
@@ -395,6 +713,8 @@ async def test_dashboard_assets_are_loopback_only_and_no_store() -> None:
     assert page.headers["content-security-policy"].startswith("default-src 'none'")
     assert script.status_code == 200
     assert script.headers["content-type"].startswith("text/javascript")
+    assert profile_client.status_code == 200
+    assert b"saveDraftProfileXlsx" in profile_client.body
     assert shared.status_code == 200
     assert shared.body == (
         fastmcp_server._DRAFT_SHARED_UI_DIRECTORY / "recommendation-client.js"
@@ -433,6 +753,7 @@ def test_dashboard_uses_shared_ui_contract_without_inline_or_remote_code() -> No
     ]
 
     assert all(name in index for name in shared_scripts)
+    assert "/draft-dashboard/draft-profile-client.js" in index
     assert max(index.index(name) for name in shared_scripts) < index.index(
         "/draft-dashboard/app.js"
     )

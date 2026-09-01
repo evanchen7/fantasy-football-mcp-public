@@ -1,6 +1,20 @@
 (function initRecommendationViewModel(globalScope) {
   'use strict';
 
+  const INJURY_STATUSES = new Set([
+    'healthy',
+    'probable',
+    'questionable',
+    'doubtful',
+    'out',
+    'ir',
+    'pup',
+    'nfi',
+    'not active',
+    'suspended',
+    'day-to-day',
+  ]);
+
   function safeText(value, maximum = 300, fallback = '') {
     if (typeof value !== 'string' && typeof value !== 'number') return fallback;
     const text = String(value).replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '').trim();
@@ -23,6 +37,11 @@
     const number = finiteNumber(value);
     if (number === null) return null;
     return `${Math.round(Math.max(0, Math.min(1, number)) * 100)}%`;
+  }
+
+  function isoTimestamp(value) {
+    const text = safeText(value, 40);
+    return text && Number.isFinite(Date.parse(text)) ? text : '';
   }
 
   function uniqueStrings(values, maximum = 12) {
@@ -124,12 +143,34 @@
     const confidence = percentage(item?.confidence);
     const returnProbability = percentage(item?.returnProbability);
     const scenarioProbability = percentage(item?.specialistDetails?.scenario?.survivalProbability);
-    const riskStatus = options.injuryStatusAvailable === true
-      ? safeText(item?.risk?.status, 40, 'unknown').toLowerCase()
+    const riskSource = safeText(item?.risk?.source, 80);
+    const riskUpdatedAt = isoTimestamp(item?.risk?.updatedAt);
+    const suppliedRiskStatus = safeText(item?.risk?.status, 40, 'unknown').toLowerCase();
+    const hasFreshAttributedInjury = options.injuryStatusAvailable === true
+      && item?.risk?.fresh === true
+      && item?.risk?.injuryFresh === true
+      && Boolean(riskSource)
+      && Boolean(riskUpdatedAt);
+    const riskStatus = hasFreshAttributedInjury && INJURY_STATUSES.has(suppliedRiskStatus)
+      ? suppliedRiskStatus
       : 'unknown';
     const riskLabel = riskStatus === 'unknown'
       ? 'Injury/news: unknown — not assumed healthy'
-      : `Injury/news: ${riskStatus}${item?.risk?.fresh === true ? '' : ' — source freshness unknown'}`;
+      : `Injury/news: ${riskStatus}`;
+    const riskSourceLabel = item?.risk?.fresh === true && riskSource && riskUpdatedAt
+      ? `Source: ${riskSource} · updated ${riskUpdatedAt}`
+      : '';
+    const recentNews = options.externalNewsAvailable === true
+      && item?.risk?.newsFresh === true
+      && Array.isArray(item?.risk?.recentNews)
+      ? uniqueStrings(item.risk.recentNews.slice(0, 3).map((news) => {
+        const headline = safeText(news?.headline, 240);
+        const category = safeText(news?.category, 80);
+        const publishedAt = isoTimestamp(news?.publishedAt);
+        if (!headline || !publishedAt) return '';
+        return [category, headline, publishedAt].filter(Boolean).join(' · ');
+      }), 3)
+      : [];
     const playerPosition = safeText(item?.player?.position, 16, 'Position unknown');
     const playerTeam = safeText(item?.player?.team, 16, 'NFL team unknown');
     const overallScore = finiteNumber(item?.overallScore);
@@ -160,6 +201,8 @@
         : 'Scenario survival unavailable · uncalibrated simulation',
       rosterImpact: safeText(item?.rosterImpact, 300, 'Roster impact unavailable.'),
       riskLabel,
+      riskSourceLabel,
+      recentNews,
       reasoning: uniqueStrings(Array.isArray(item?.reasoning) ? item.reasoning : [], 6),
     };
   }
@@ -224,6 +267,7 @@
         .slice(0, maximum)
         .map((item, index) => recommendationCard(item, index, {
           injuryStatusAvailable: response?.capabilities?.injuryStatus === true,
+          externalNewsAvailable: response?.capabilities?.externalNews === true,
         }))
       : [];
     model.contingency = mode === 'success' || mode === 'degraded'

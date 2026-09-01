@@ -117,6 +117,77 @@ test('never presents a player as healthy when injury capability is unavailable',
   assert.equal(model.recommendations[0].riskLabel, 'Injury/news: unknown — not assumed healthy');
 });
 
+test('requires fresh attributed per-player evidence before showing an injury status', () => {
+  const model = createRecommendationViewModel(response({
+    capabilities: { injuryStatus: true, externalNews: false },
+    recommendations: [
+      candidate(1, {
+        risk: {
+          status: 'questionable',
+          source: 'FantasyPros',
+          updatedAt: '2026-09-01T22:15:00Z',
+          fresh: true,
+          injuryFresh: true,
+        },
+      }),
+      candidate(2, {
+        risk: {
+          status: 'healthy',
+          source: 'FantasyPros',
+          updatedAt: '2026-08-01T22:15:00Z',
+          fresh: false,
+          injuryFresh: false,
+        },
+      }),
+      candidate(3, {
+        risk: {
+          status: 'definitely healthy',
+          source: 'FantasyPros',
+          updatedAt: '2026-09-01T22:15:00Z',
+          fresh: true,
+          injuryFresh: true,
+        },
+      }),
+    ],
+  }), { leagueId: '10462193' });
+
+  assert.equal(model.recommendations[0].riskLabel, 'Injury/news: questionable');
+  assert.equal(model.recommendations[1].riskLabel, 'Injury/news: unknown — not assumed healthy');
+  assert.equal(model.recommendations[2].riskLabel, 'Injury/news: unknown — not assumed healthy');
+});
+
+test('shows allowlisted FantasyPros source and recent headlines without changing unknown status', () => {
+  const model = createRecommendationViewModel(response({
+    capabilities: { injuryStatus: false, externalNews: true },
+    recommendations: [candidate(1, {
+      risk: {
+        status: 'unknown',
+        source: 'FantasyPros',
+        updatedAt: '2026-09-01T22:15:00Z',
+        fresh: true,
+        newsFresh: true,
+        recentNews: [
+          {
+            headline: 'Returns to full team drills',
+            category: 'Injuries',
+            publishedAt: '2026-09-01T21:00:00Z',
+          },
+          { headline: '<img src=x onerror=alert(1)>', publishedAt: 'invalid' },
+        ],
+      },
+    })],
+  }), { leagueId: '10462193' });
+
+  assert.equal(model.recommendations[0].riskLabel, 'Injury/news: unknown — not assumed healthy');
+  assert.equal(
+    model.recommendations[0].riskSourceLabel,
+    'Source: FantasyPros · updated 2026-09-01T22:15:00Z',
+  );
+  assert.deepEqual(model.recommendations[0].recentNews, [
+    'Injuries · Returns to full team drills · 2026-09-01T21:00:00Z',
+  ]);
+});
+
 test('does not coerce null, empty, or boolean response fields into picks or probabilities', () => {
   const model = createRecommendationViewModel(response({
     state: {
