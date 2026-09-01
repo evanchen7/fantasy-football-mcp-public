@@ -35,6 +35,7 @@ The main FastMCP server currently exposes:
 - `ff_build_lineup`
 - `ff_get_draft_results`
 - `ff_get_live_draft_state`
+- `ff_get_live_draft_recommendation`
 - `ff_get_waiver_wire`
 - `ff_get_draft_rankings`
 - `ff_get_draft_recommendation`
@@ -46,7 +47,7 @@ The server also contains maintenance tools used for local operation and troubles
 ## Installation
 
 ```bash
-git clone https://github.com/derekrbreese/fantasy-football-mcp-public.git
+git clone https://github.com/evanchen7/fantasy-football-mcp-public.git
 cd fantasy-football-mcp-public
 pip install -r requirements.txt
 ```
@@ -78,6 +79,8 @@ This single-user mode is the supported way to run the app.
 The optional [Yahoo Fantasy Draft Recorder](chrome-extension/README.md) works in Firefox and Chrome. It watches a logged-in Yahoo live draft, captures the full **Results → Round by Round** ledger, saves picks locally in the browser, and exports CSV or agent-ready JSON. It never stores Yahoo authentication data.
 
 When this FastMCP server is running locally on port 8765 (`PORT=8765 python fastmcp_server.py`), the extension also syncs sanitized draft context to a loopback-only endpoint. Agents can call `ff_get_live_draft_state` to retrieve every pick, your roster, and rosters grouped by fantasy team before advising on the next selection. Local server state is written to `~/.fantasy-football-mcp/live-drafts.json` with user-only permissions.
+
+Call `ff_get_live_draft_recommendation` with a Yahoo `league_key` during the draft. One in-process orchestrator filters drafted players and combines focused value, roster-construction, positional-run, opponent-survival, risk/news, deterministic simulation, and critic components. It returns a primary pick, alternatives, confidence, estimated return probability, roster impact, risks, and a contingency. The opponent and simulation probabilities are explicitly labeled as uncalibrated heuristics; optional news is used only when a ranking source includes timestamped attribution, and missing news is reported as unknown rather than healthy. Recommendations are blocked when the pick ledger is incomplete, duplicated, or unnumbered.
 
 For Firefox, load `chrome-extension/manifest.json` from **This Firefox** in `about:debugging`. See the extension README for full setup, privacy, persistence, and testing instructions.
 
