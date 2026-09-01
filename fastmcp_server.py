@@ -9,9 +9,12 @@ This module wraps the existing Yahoo Fantasy Football tooling defined in
 
 import json
 import os
+import re
 from collections.abc import Iterable
 from dataclasses import asdict, is_dataclass
+from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, Literal, Optional, Sequence, Union
+from urllib.parse import urlsplit
 
 from fastmcp import Context, FastMCP
 from mcp.types import ContentBlock, TextContent
@@ -683,11 +686,109 @@ _ALLOWED_DRAFT_SYNC_ORIGINS = (
     "chrome-extension://",
 )
 
+_DRAFT_RECOMMENDATION_MAX_BODY = 4_096
+_DRAFT_RECOMMENDATION_FIELDS = frozenset(
+    {"schemaVersion", "leagueId", "strategy", "count", "rankingCount", "simulations"}
+)
+_DRAFT_LEAGUE_ID = re.compile(r"^\d{1,32}$")
+_DRAFT_EXTENSION_ORIGIN = re.compile(
+    r"^(?:moz|chrome)-extension://[A-Za-z0-9._-]{1,128}$"
+)
+_DRAFT_DASHBOARD_DIRECTORY = Path(__file__).resolve().parent / "src" / "dashboard"
+_DRAFT_SHARED_UI_DIRECTORY = Path(__file__).resolve().parent / "chrome-extension"
+_LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}
+
 
 def _is_allowed_draft_sync_origin(origin: str) -> bool:
     return origin == _ALLOWED_DRAFT_SYNC_ORIGINS[0] or origin.startswith(
         _ALLOWED_DRAFT_SYNC_ORIGINS[1:]
     )
+
+
+def _is_loopback_request(request: Request) -> bool:
+    client_host = request.client.host if request.client else ""
+    return client_host in _LOOPBACK_HOSTS
+
+
+def _is_same_loopback_origin(request: Request, origin: str) -> bool:
+    try:
+        origin_parts = urlsplit(origin)
+        host_parts = urlsplit(f"//{request.headers.get('host', '')}")
+        origin_port = origin_parts.port
+        host_port = host_parts.port
+    except ValueError:
+        return False
+    if (
+        origin_parts.scheme != "http"
+        or origin_parts.hostname not in _LOOPBACK_HOSTS
+        or host_parts.hostname not in _LOOPBACK_HOSTS
+        or origin_parts.username is not None
+        or origin_parts.password is not None
+        or origin_parts.path
+        or origin_parts.query
+        or origin_parts.fragment
+    ):
+        return False
+    return origin_parts.hostname == host_parts.hostname and origin_port == host_port
+
+
+def _is_allowed_draft_ui_origin(request: Request, origin: str) -> bool:
+    return bool(_DRAFT_EXTENSION_ORIGIN.fullmatch(origin)) or _is_same_loopback_origin(
+        request, origin
+    )
+
+
+def _draft_ui_headers(request: Request) -> Dict[str, str]:
+    origin = request.headers.get("origin", "")
+    headers = {
+        "Access-Control-Allow-Headers": "Content-Type, X-Fantasy-Draft-UI",
+        "Access-Control-Allow-Methods": "POST, OPTIONS",
+        "Access-Control-Allow-Private-Network": "true",
+        "Cache-Control": "no-store",
+        "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'",
+        "Referrer-Policy": "no-referrer",
+        "Vary": "Origin",
+        "X-Content-Type-Options": "nosniff",
+        "X-Frame-Options": "DENY",
+    }
+    if origin and _is_allowed_draft_ui_origin(request, origin):
+        headers["Access-Control-Allow-Origin"] = origin
+    return headers
+
+
+def _draft_dashboard_headers() -> Dict[str, str]:
+    return {
+        "Cache-Control": "no-store",
+        "Content-Security-Policy": (
+            "default-src 'none'; script-src 'self'; style-src 'self'; "
+            "connect-src 'self'; img-src 'self' data:; base-uri 'none'; "
+            "frame-ancestors 'none'; form-action 'self'"
+        ),
+        "Cross-Origin-Opener-Policy": "same-origin",
+        "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
+        "Referrer-Policy": "no-referrer",
+        "X-Content-Type-Options": "nosniff",
+        "X-Frame-Options": "DENY",
+    }
+
+
+def _draft_json_error(
+    request: Request, message: str, status_code: int
+) -> JSONResponse:
+    return JSONResponse(
+        {"status": "error", "message": message},
+        status_code=status_code,
+        headers=_draft_ui_headers(request),
+    )
+
+
+def _clamped_draft_integer(
+    payload: Dict[str, Any], field: str, default: int, minimum: int, maximum: int
+) -> int:
+    value = payload.get(field, default)
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise LiveDraftValidationError(f"{field} must be an integer")
+    return max(minimum, min(value, maximum))
 
 
 def _draft_sync_headers(request: Request) -> Dict[str, str]:
@@ -771,6 +872,181 @@ async def receive_live_draft(request: Request) -> Response:
         },
         headers=headers,
     )
+
+
+@server.custom_route(
+    "/draft-recommendation", methods=["POST", "OPTIONS"], include_in_schema=False
+)
+async def receive_live_draft_recommendation(request: Request) -> Response:
+    """Serve one bounded recommendation to a trusted local draft UI."""
+
+    headers = _draft_ui_headers(request)
+    if not _is_loopback_request(request):
+        return _draft_json_error(request, "Loopback access required", 403)
+
+    origin = request.headers.get("origin", "")
+    if not origin:
+        return _draft_json_error(request, "Origin required", 403)
+    if not _is_allowed_draft_ui_origin(request, origin):
+        return _draft_json_error(request, "Origin not allowed", 403)
+    if request.method == "OPTIONS":
+        return Response(status_code=204, headers=headers)
+
+    if request.headers.get("x-fantasy-draft-ui") != "1":
+        return _draft_json_error(request, "UI header required", 403)
+    media_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+    if media_type != "application/json":
+        return _draft_json_error(request, "Content-Type must be application/json", 415)
+    try:
+        content_length = int(request.headers.get("content-length", "0") or 0)
+    except ValueError:
+        return _draft_json_error(request, "Invalid content length", 400)
+    if content_length < 0:
+        return _draft_json_error(request, "Invalid content length", 400)
+    if content_length > _DRAFT_RECOMMENDATION_MAX_BODY:
+        return _draft_json_error(request, "Payload too large", 413)
+
+    body = await request.body()
+    if len(body) > _DRAFT_RECOMMENDATION_MAX_BODY:
+        return _draft_json_error(request, "Payload too large", 413)
+    try:
+        payload = json.loads(body)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return _draft_json_error(request, "Request body must be valid JSON", 400)
+    if not isinstance(payload, dict):
+        return _draft_json_error(request, "Request body must be a JSON object", 400)
+    if set(payload) - _DRAFT_RECOMMENDATION_FIELDS:
+        return _draft_json_error(request, "Unsupported field in recommendation request", 400)
+    schema_version = payload.get("schemaVersion")
+    if isinstance(schema_version, bool) or schema_version != 1:
+        return _draft_json_error(request, "schemaVersion 1 is required", 400)
+    league_id = payload.get("leagueId")
+    if not isinstance(league_id, str) or not _DRAFT_LEAGUE_ID.fullmatch(league_id):
+        return _draft_json_error(request, "leagueId has an invalid format", 400)
+    strategy = payload.get("strategy", "balanced")
+    if strategy not in {"conservative", "balanced", "aggressive"}:
+        return _draft_json_error(request, "strategy is invalid", 400)
+    try:
+        count = _clamped_draft_integer(payload, "count", 5, 1, 20)
+        ranking_count = _clamped_draft_integer(
+            payload, "rankingCount", 250, 25, 500
+        )
+        simulations = _clamped_draft_integer(
+            payload, "simulations", 256, 0, 512
+        )
+    except LiveDraftValidationError as exc:
+        return _draft_json_error(request, str(exc), 400)
+
+    async def call_yahoo_tool(name: str, **arguments: Any) -> Dict[str, Any]:
+        return await _call_legacy_tool(name, **arguments)
+
+    try:
+        result = await get_live_draft_recommendation(
+            call_yahoo_tool,
+            league_key=None,
+            league_id=league_id,
+            strategy=strategy,
+            count=count,
+            ranking_count=ranking_count,
+            simulations=simulations,
+            require_authenticated_team=True,
+        )
+    except LiveDraftValidationError as exc:
+        return _draft_json_error(request, str(exc), 400)
+    except Exception:
+        return _draft_json_error(request, "Recommendation service unavailable", 502)
+    return JSONResponse(result, headers=headers)
+
+
+def _serve_draft_dashboard_asset(request: Request, filename: str, media_type: str) -> Response:
+    if not _is_loopback_request(request):
+        return JSONResponse(
+            {"status": "error", "message": "Loopback access required"},
+            status_code=403,
+            headers=_draft_dashboard_headers(),
+        )
+    try:
+        content = (_DRAFT_DASHBOARD_DIRECTORY / filename).read_bytes()
+    except OSError:
+        return Response(
+            content="Draft dashboard asset unavailable",
+            status_code=500,
+            media_type="text/plain",
+            headers=_draft_dashboard_headers(),
+        )
+    return Response(content=content, media_type=media_type, headers=_draft_dashboard_headers())
+
+
+@server.custom_route("/draft-dashboard", methods=["GET"], include_in_schema=False)
+@server.custom_route("/draft-dashboard/", methods=["GET"], include_in_schema=False)
+async def serve_draft_dashboard(request: Request) -> Response:
+    """Serve the private, no-store live-draft dashboard shell."""
+
+    return _serve_draft_dashboard_asset(request, "index.html", "text/html")
+
+
+@server.custom_route(
+    "/draft-dashboard/app.js", methods=["GET"], include_in_schema=False
+)
+async def serve_draft_dashboard_script(request: Request) -> Response:
+    return _serve_draft_dashboard_asset(request, "app.js", "text/javascript")
+
+
+@server.custom_route(
+    "/draft-dashboard/styles.css", methods=["GET"], include_in_schema=False
+)
+async def serve_draft_dashboard_styles(request: Request) -> Response:
+    return _serve_draft_dashboard_asset(request, "styles.css", "text/css")
+
+
+def _serve_shared_draft_ui_script(request: Request, filename: str) -> Response:
+    if not _is_loopback_request(request):
+        return JSONResponse(
+            {"status": "error", "message": "Loopback access required"},
+            status_code=403,
+            headers=_draft_dashboard_headers(),
+        )
+    try:
+        content = (_DRAFT_SHARED_UI_DIRECTORY / filename).read_bytes()
+    except OSError:
+        return Response(
+            content="Shared draft UI asset unavailable",
+            status_code=500,
+            media_type="text/plain",
+            headers=_draft_dashboard_headers(),
+        )
+    return Response(
+        content=content,
+        media_type="text/javascript",
+        headers=_draft_dashboard_headers(),
+    )
+
+
+@server.custom_route(
+    "/draft-dashboard/shared/recommendation-client.js",
+    methods=["GET"],
+    include_in_schema=False,
+)
+async def serve_draft_recommendation_client(request: Request) -> Response:
+    return _serve_shared_draft_ui_script(request, "recommendation-client.js")
+
+
+@server.custom_route(
+    "/draft-dashboard/shared/recommendation-view-model.js",
+    methods=["GET"],
+    include_in_schema=False,
+)
+async def serve_draft_recommendation_view_model(request: Request) -> Response:
+    return _serve_shared_draft_ui_script(request, "recommendation-view-model.js")
+
+
+@server.custom_route(
+    "/draft-dashboard/shared/recommendation-renderer.js",
+    methods=["GET"],
+    include_in_schema=False,
+)
+async def serve_draft_recommendation_renderer(request: Request) -> Response:
+    return _serve_shared_draft_ui_script(request, "recommendation-renderer.js")
 
 
 @server.tool(
@@ -1853,7 +2129,7 @@ def run_http_server(
 ) -> None:
     """Start the FastMCP server using the HTTP transport."""
 
-    resolved_host = host or os.getenv("HOST", "0.0.0.0")
+    resolved_host = host or os.getenv("HOST", "127.0.0.1")
     resolved_port = port or int(os.getenv("PORT", "8000"))
 
     server.run(

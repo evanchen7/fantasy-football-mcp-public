@@ -13,6 +13,9 @@ This list separates the delivered live-draft baseline from prioritized follow-up
 - Conservative player resolution, stale-state warnings, and incomplete-ledger blocking.
 - Popup ledger diagnostics with exact missing, duplicate, and sanitized unnumbered-pick details, plus guarded authoritative full repair.
 - Per-league browser storage and durable, cross-tab repair reconciliation without aggregate session-map races.
+- Persistent Firefox Draft Assistant sidebar with explicit league selection, shared fail-closed recommendation components, and no Yahoo-page injection or draft actions.
+- Loopback-only local dashboard with a configurable recommendation board, roster and draft-history views, specialist comparisons, critic checks, and data-source diagnostics.
+- Strict local recommendation UI boundary: allowlisted bounded requests, exact saved/Yahoo league resolution, authenticated-team verification, serialized Yahoo calls, post-scoring snapshot revalidation, and no-store responses.
 - Uncalibrated labels for heuristic probabilities and confidence.
 - Passing Python and extension test suites for the delivered paths.
 
