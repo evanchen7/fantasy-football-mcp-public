@@ -30,6 +30,12 @@ cd fantasy-football-mcp-public
 uv sync
 ```
 
+The optional Databricks advisory critic uses public OSS SDK packages in a separate dependency extra. Install it only if you intend to opt in:
+
+```bash
+uv sync --extra databricks
+```
+
 Or use a virtual environment and `requirements.txt`:
 
 ```bash
@@ -66,6 +72,8 @@ YAHOO_GUID=...
 ```
 
 The repository ignores `.env`, token JSON, OAuth state, and common MCP configuration files. Rotate any secret that has ever entered public Git history. Restart the server after changing an API key or any other `.env` value; the running process does not reload credentials automatically.
+
+The optional Databricks advisory critic is disabled by default. Its setup and outbound-data boundary are documented in [Databricks advisory critic](#databricks-advisory-critic).
 
 ### 3. Start the private loopback server
 
@@ -178,6 +186,36 @@ The integration is defensive by design:
 
 The first FantasyPros-enabled recommendation automatically fetches the base player catalog, injuries, and news and populates `~/.fantasy-football-mcp/fantasypros-snapshots.sqlite3` with each successful snapshot. No separate prefetch, database migration, or user refresh command is needed. The SQLite cache is bounded to sixteen snapshot variants and 8 MB of normalized record JSON. It contains normalized FantasyPros base snapshots only—not the API key, raw provider bodies, URLs, query strings, targeted identity lookups, Yahoo data, draft state, league IDs, or recommendation candidates. User-facing warnings identify stale fallback; stale per-player status and headlines are suppressed.
 
+## Databricks advisory critic
+
+The Databricks integration is an optional, advisory-only second look at a completed deterministic recommendation. The local deterministic engine remains authoritative: the model cannot reorder candidates, change scores, select or draft a player, or feed output back into any specialist. A missing, incomplete, or defective authoritative ledger skips the advisory path. Stale state may still produce degraded deterministic candidates; when it does, staleness is disclosed as a quality flag and the deterministic response remains visibly degraded. Disabled or skipped advisory work is omitted from the response entirely; a timeout, dependency problem, authentication failure, or invalid model response fails open and leaves the deterministic recommendations unchanged.
+
+Install the public SDK dependencies, then configure a private `.env` with a generic workspace root and serving-endpoint name:
+
+```bash
+uv sync --extra databricks
+```
+
+```env
+FANTASY_FOOTBALL_DATABRICKS_ADVISORY_ENABLED=true
+FANTASY_FOOTBALL_DATABRICKS_HOST=https://your-workspace.cloud.databricks.com
+FANTASY_FOOTBALL_DATABRICKS_MODEL=your-serving-endpoint
+FANTASY_FOOTBALL_DATABRICKS_ADVISORY_TIMEOUT_SECONDS=8.0
+```
+
+The host must be an HTTPS Databricks workspace root with no path, query string, embedded username, or credential. The model is the exact serving endpoint made available by that workspace. Configure one of the Databricks SDK's supported unified-authentication methods outside this app; this app does not accept, persist, return, or log a Databricks access token. Do not commit a company workspace hostname, endpoint name, profile, or token to this public repository. Restart the server after changing the configuration.
+
+The eight-second default deadline includes first-call client/authentication setup as well as inference. You can configure a shorter deadline for a tighter draft clock; a timeout returns only an unavailable advisory notice and leaves the deterministic board unchanged.
+
+Only the following allowlisted, identity-free summary can be sent to the configured Databricks endpoint, and only after the local ledger is complete:
+
+- Candidate ordinal and position; overall and specialist component scores; explicitly uncalibrated return probability; and normalized risk status
+- Aggregate roster position counts and the positions of a bounded number of recent picks
+- Current and next overall-pick numbers
+- Bounded quality flags for stale state, unavailable evidence, or inferred settings
+
+Player names and keys, league/session/team identifiers, the pick ledger, news and headlines, URLs, browser fields, Yahoo credentials, and Databricks credentials are excluded. Provider output is treated as untrusted: only bounded summary/caution text is rendered, and it never changes candidate order. Identical sanitized inputs use a small, short-lived in-memory cache to reduce latency and requests; nothing from this advisory cache is written to disk, and restarting the server clears it. Any retention performed by the configured Databricks workspace is governed by that workspace's own policy.
+
 ## Yahoo API setup and limitations
 
 Creating a [Yahoo developer app](https://developer.yahoo.com/apps/) and obtaining OAuth tokens is not enough by itself. Yahoo manually provisions Fantasy Sports API access through its [Fantasy API access process](https://sports.yahoo.com/developer/access/). Associate the approval request with the same client ID; otherwise Fantasy calls return `401` with `oauth_problem="additional_authorization_required"`.
@@ -269,7 +307,7 @@ Private runtime data is stored under `~/.fantasy-football-mcp/`. The default dir
 
 The browser profile separately stores the extension's sanitized per-league recorder state. The recorder does not store Yahoo cookies, OAuth credentials, page URLs, query parameters, chat, or arbitrary page fields. Loopback routes validate origins, cap payloads, allowlist fields, and return recommendation responses with `Cache-Control: no-store`.
 
-FantasyPros receives only its API requests. No draft ledger or Yahoo credential is sent to FantasyPros. Google Drive receives nothing from this app because it is not a runtime integration.
+FantasyPros receives only its API requests. No draft ledger or Yahoo credential is sent to FantasyPros. When the Databricks advisory critic is explicitly enabled, Databricks receives only the identity-free allowlist described above; this app keeps its advisory cache in memory only. Google Drive receives nothing from this app because it is not a runtime integration.
 
 ## Development and validation
 

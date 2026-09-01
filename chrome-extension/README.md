@@ -91,7 +91,7 @@ The popup displays picks and recorder health, not recommendations, and it cannot
 
 The sidebar shows up to five recommendations beside Yahoo. It selects a league only from the active draft tab or an explicit saved-league choice; it never silently chooses the newest saved session. After the initial request, a newer pick for that exact league cancels stale work, debounces duplicate events, and refreshes automatically. Another league's storage updates do not affect it.
 
-Cards show roster fit, rank/ADP/tier/bye context, reasoning, injury/news risk, and explicitly uncalibrated confidence and return/simulation probabilities. Stale state, inferred team counts, unresolved player identities, unavailable roster settings, and unknown injury/news data are visibly degraded.
+Cards show roster fit, rank/ADP/tier/bye context, reasoning, injury/news risk, and explicitly uncalibrated confidence and return/simulation probabilities. Stale state, inferred team counts, unresolved player identities, unavailable roster settings, and unknown injury/news data are visibly degraded. When the server's optional Databricks critic is enabled and available, a separate advisory-only summary appears after the unchanged deterministic recommendations.
 
 ### Full dashboard
 
@@ -166,6 +166,14 @@ The first FantasyPros-enabled recommendation creates and populates the private S
 
 See [FantasyPros injury/news cache](../README.md#fantasypros-injurynews-cache) for request limits, terms/attribution, cache contents, and privacy behavior.
 
+## Optional Databricks advisory critic
+
+The sidebar and dashboard can render the server's optional Databricks advisory section, but the extension never authenticates to Databricks and stores no model response or credential. Install and enable it on the local server as described in [Databricks advisory critic](../README.md#databricks-advisory-critic); it remains disabled by default.
+
+The deterministic recommendation order and scores are authoritative. The advisory model cannot reorder candidates, select or draft a player, or feed values back into scoring. It is skipped for an incomplete or defective authoritative ledger. Stale state can still yield degraded deterministic candidates; staleness is sent as a bounded quality flag and remains visibly degraded in the response. Disabled/skipped output is omitted; provider failure is shown as bounded unavailable context while the deterministic cards remain usable.
+
+Only an identity-free allowlist leaves the local server: anonymous candidate ordinal and position, overall/component scores, explicitly uncalibrated return probability, normalized risk status, aggregate roster position counts, recent pick positions, current/next overall-pick numbers, and bounded quality flags. It excludes player names/keys, league/session/team IDs, the pick ledger, news/headlines, URLs, browser fields, and credentials. Results use a bounded in-memory-only cache and are rendered as inert text after the recommendation cards.
+
 ## Agent handoff
 
 ### Automatic MCP sync
@@ -227,6 +235,7 @@ Yahoo may have changed its layout. Select **Save diagnostics**. The report conta
 - Loopback endpoints allowlist fields, validate the exact session, cap payloads, restrict origins, and return recommendation responses with `Cache-Control: no-store`.
 - Server-side draft/profile/cache files use user-only permissions.
 - The extension stores no Yahoo credentials, cookies, OAuth parameters, full page locations, or arbitrary browser fields.
+- Optional Databricks review receives no player identity, league/session/team identity, ledger, headline, URL, or credential; it cannot mutate recommendation order or scores.
 - Recommendations never draft a player or inject controls into Yahoo.
 
 ## Store preparation
