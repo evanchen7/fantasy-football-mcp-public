@@ -125,7 +125,7 @@ test('league chooser exposes only allowlisted identity labels', () => {
   ]);
 });
 
-test('manifest keeps the recorder popup and adds a persistent Firefox sidebar', () => {
+test('manifest keeps the recorder UI and cross-browser background lock broker', () => {
   const extensionRoot = path.join(__dirname, '..');
   const manifest = JSON.parse(fs.readFileSync(path.join(extensionRoot, 'manifest.json'), 'utf8'));
   const html = fs.readFileSync(path.join(extensionRoot, 'assistant.html'), 'utf8');
@@ -135,6 +135,11 @@ test('manifest keeps the recorder popup and adds a persistent Firefox sidebar', 
   assert.equal(manifest.action.default_popup, 'popup.html');
   assert.equal(manifest.sidebar_action.default_panel, 'assistant.html');
   assert.equal(manifest.sidebar_action.default_title, 'Fantasy Draft Assistant');
+  assert.deepEqual(manifest.background, {
+    scripts: ['lock-broker.js'],
+    service_worker: 'lock-broker.js',
+  });
+  assert.equal(manifest.minimum_chrome_version, '121');
   assert.equal(manifest.content_scripts[0].js.includes('assistant.js'), false);
   assert.match(html, /id="league-select"/);
   assert.match(html, /id="refresh-recommendations"/);

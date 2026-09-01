@@ -51,6 +51,7 @@ None. All JavaScript used by the extension is packaged with it. There are no rem
 - CSV export neutralizes formula-leading characters to reduce spreadsheet injection risk.
 - The draft URL parser keeps only the sport, league ID, and team ID path segments; query parameters are discarded.
 - The extension requests only `storage`, narrowly scoped Yahoo draft-client host access, and loopback host access for local sync and recommendation UI routes.
+- The packaged background script is a private lock broker. It receives only the allowlisted Yahoo session key needed to serialize same-session extension work, and keeps only an opaque nonce plus expiry in browser-session storage to fence a background restart. It receives no page URL, query parameters, cookies, credentials, player data, or arbitrary DOM fields.
 
 ## Submission checklist
 

@@ -12,7 +12,7 @@ This list separates the delivered live-draft baseline from prioritized follow-up
 - Yahoo roster-slot support, including Superflex aliases.
 - Conservative player resolution, stale-state warnings, and incomplete-ledger blocking.
 - Popup ledger diagnostics with exact missing, duplicate, and sanitized unnumbered-pick details, plus guarded authoritative full repair.
-- Per-league browser storage and durable, cross-tab repair reconciliation without aggregate session-map races.
+- Per-league browser storage, durable repair/reset reconciliation, and a cross-browser extension-background lock broker with bounded heartbeats, expiring session fences, and cooperative lease cancellation instead of Firefox content-script Web Locks.
 - Persistent Firefox Draft Assistant sidebar with explicit league selection, shared fail-closed recommendation components, and no Yahoo-page injection or draft actions.
 - Loopback-only local dashboard with a configurable recommendation board, roster and draft-history views, specialist comparisons, critic checks, and data-source diagnostics.
 - Exact-session local DraftSheets/JSON profile import with bounded parsing, private atomic storage, and zero Yahoo API calls when a matching profile is available.

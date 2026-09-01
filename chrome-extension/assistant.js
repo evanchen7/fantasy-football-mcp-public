@@ -3,9 +3,8 @@
 
   const extensionApi = YahooDraftWebExtension.createWebExtensionApi(globalThis);
   const webext = extensionApi.native;
-  const draftStorage = YahooDraftStorage.createDraftStorage(extensionApi, {
-    lockManager: globalThis.navigator?.locks,
-  });
+  const operationLock = YahooDraftStorage.createSessionOperationLock(webext.runtime);
+  const draftStorage = YahooDraftStorage.createDraftStorage(extensionApi, { operationLock });
   const requestGuard = YahooDraftRecommendationSidebarState.createRecommendationRequestGuard();
   const elements = {
     league: document.querySelector('#league-select'),
