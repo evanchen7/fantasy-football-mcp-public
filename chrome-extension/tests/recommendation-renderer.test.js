@@ -206,3 +206,87 @@ test('renders only the generic reason details for an unavailable AI critic and n
     node.className.split(' ').includes('advisory-critic')
   )).length, 0);
 });
+
+test('renders compact decision badges and bounded sleeper-watch evidence as inert text', () => {
+  globalThis.pwned = false;
+  const malicious = '<img src=x onerror="globalThis.pwned=true">';
+  const root = new FakeElement('main');
+  renderRecommendationView(root, {
+    mode: 'success',
+    leagueLabel: 'League 123',
+    statusTitle: 'Recommendations ready',
+    statusMessage: 'Ready.',
+    actionNotice: 'Recommendations only — this assistant never drafts players.',
+    draftContext: [],
+    ledgerIssues: [],
+    degradations: [],
+    decisionBrief: {
+      turnLabel: 'You are next',
+      turnTone: 'next',
+      primaryLabel: 'Recommended now',
+      primaryName: 'Market Target',
+      primaryMeta: 'WR · SEA',
+      primaryAction: 'Take now',
+      primaryBadges: ['Value', 'Sleeper Watch'],
+      fallbacks: [],
+    },
+    marketSignals: {
+      status: 'available',
+      message: 'Five transparent late-market targets.',
+      sourceLabel: 'DraftSheets 2026 · season 2026 · as of 2026-09-01',
+      methodLabel: 'Uncalibrated deterministic rank-versus-ADP market heuristic.',
+      scope: 'Counts cover only the bounded ranking frontier.',
+      definitions: [
+        'Value: at least one league round past real ADP.',
+        'Sleeper Watch: Round 7+ and rank beats real ADP by at least one league round.',
+        'Fade: rank trails real ADP by at least one league round.',
+      ],
+      trust: ['Ready: Authoritative ledger complete.'],
+      exclusions: ['24 drafted players excluded.', '3 players have no real ADP.'],
+      sleeperWatch: [{
+        name: malicious,
+        playerMeta: 'WR · SEA',
+        summary: 'Ranked 24 picks ahead of real ADP.',
+        badges: [{ code: 'sleeper-watch', label: 'Sleeper Watch', detail: 'Market discount' }],
+        actionLabel: 'Can wait',
+        actionReason: 'Uncalibrated timing estimate.',
+        riskCaution: malicious,
+      }],
+    },
+    recommendations: [{
+      rankLabel: '1',
+      name: 'Market Target',
+      playerMeta: 'WR · SEA',
+      valueLabel: 'Rank 20 · ADP 44',
+      scoreLabel: 'Score 88.2',
+      confidenceLabel: 'Confidence 81% · uncalibrated',
+      returnProbabilityLabel: 'Estimated return 37% · uncalibrated heuristic',
+      scenarioProbabilityLabel: 'Scenario survival 42% · uncalibrated simulation',
+      rosterImpact: 'Fills WR.',
+      riskLabel: 'Injury/news: unknown — not assumed healthy',
+      riskSourceLabel: '',
+      recentNews: [],
+      reasoning: [],
+      badges: [
+        { code: 'value', label: 'Value', detail: '12 picks past real ADP' },
+        { code: 'sleeper-watch', label: 'Sleeper Watch', detail: 'Ranked ahead of market' },
+      ],
+      actionLabel: 'Take now',
+      actionReason: malicious,
+      riskCaution: '',
+    }],
+    advisoryCritic: null,
+    contingency: [],
+    emptyMessage: '',
+  }, { document: fakeDocument });
+
+  assert.equal(globalThis.pwned, false);
+  assert.match(root.textContent, /Sleeper Watch/);
+  assert.match(root.textContent, /Take now/);
+  assert.match(root.textContent, /Can wait/);
+  assert.match(root.textContent, /real ADP/);
+  assert.doesNotMatch(root.textContent, /Breakout/);
+  assert.ok(findAll(root, (node) => node.className.includes('decision-badge')).length >= 3);
+  assert.equal(findAll(root, (node) => node.className === 'sleeper-watch-item').length, 1);
+  assert.ok(findAll(root, (node) => node._textContent === malicious).length >= 2);
+});

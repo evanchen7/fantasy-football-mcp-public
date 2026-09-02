@@ -33,6 +33,7 @@ h1 { font-size: 22px; line-height: 1.15; }
 .assistant-status,
 .draft-context,
 .decision-brief,
+.market-signals,
 .notice,
 .recommendation-card,
 .contingency {
@@ -111,6 +112,31 @@ dd { margin-top: 3px; font-size: 12px; font-weight: 700; overflow-wrap: anywhere
 .fallback-item { display: grid; min-width: 0; padding: 7px; border-radius: 7px; background: #f7f9f8; }
 .fallback-item strong { font-size: 11px; overflow-wrap: anywhere; }
 .fallback-item small { margin-top: 2px; color: #6b7771; font-size: 9px; }
+
+.decision-badges { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 7px; }
+.decision-primary .decision-badges { grid-column: 1 / -1; margin-top: 4px; }
+.decision-badge { padding: 3px 6px; border: 1px solid #c9d9cf; border-radius: 999px; color: #345c46; background: #f3f8f5; font-size: 9px; font-weight: 800; }
+.decision-badge--sleeper-watch { border-color: #c9abd9; color: #5f1a8b; background: #f8f2fb; }
+.decision-badge--fade { border-color: #e2c27d; color: #845717; background: #fff9ed; }
+.decision-action { margin-top: 7px; color: #345c46; font-size: 10px; line-height: 1.4; overflow-wrap: anywhere; }
+.decision-action--primary { align-self: center; justify-self: end; margin-top: 4px; font-weight: 850; }
+
+.market-signals { padding: 12px; }
+.market-signals--blocked { border-color: #e1a4a4; }
+.market-signals--unavailable { border-color: #e2c27d; }
+.market-signals h2 { font-size: 14px; }
+.market-message { margin-top: 5px; font-size: 11px; font-weight: 700; line-height: 1.4; }
+.market-source, .market-method, .market-scope { margin-top: 4px; color: #6b7771; font-size: 9px; line-height: 1.4; overflow-wrap: anywhere; }
+.sleeper-watch-list { display: grid; gap: 7px; margin-top: 10px; }
+.sleeper-watch-item { padding: 9px; border-radius: 8px; background: #f7f9f8; }
+.sleeper-watch-identity { display: flex; gap: 8px; align-items: baseline; justify-content: space-between; }
+.sleeper-watch-identity strong { font-size: 11px; overflow-wrap: anywhere; }
+.sleeper-watch-identity span { color: #6b7771; font-size: 9px; white-space: nowrap; }
+.market-summary { margin-top: 6px; color: #45534c; font-size: 10px; line-height: 1.4; overflow-wrap: anywhere; }
+.market-risk-caution { margin-top: 6px; color: #a72e2e; font-size: 10px; font-weight: 700; line-height: 1.4; overflow-wrap: anywhere; }
+.market-details { margin-top: 8px; color: #526059; font-size: 10px; }
+.market-details summary { cursor: pointer; font-weight: 800; }
+.market-detail-list { margin: 6px 0 0; padding-left: 17px; line-height: 1.4; overflow-wrap: anywhere; }
 
 .notice { padding: 12px; font-size: 12px; }
 .notice h2, .recommendations > h2, .contingency h2 { margin-bottom: 7px; font-size: 13px; }

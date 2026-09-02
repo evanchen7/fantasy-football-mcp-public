@@ -578,3 +578,154 @@ test('does not show available AI advice without a deterministic recommendation b
   assert.deepEqual(model.recommendations, []);
   assert.equal(model.advisoryCritic, null);
 });
+
+test('builds bounded market badges, action guidance, and sleeper-watch trust details', () => {
+  const malicious = '<img src=x onerror="globalThis.pwned=true">';
+  const marketCandidate = candidate(1, {
+    decisionSignals: {
+      badges: [
+        { code: 'value', label: 'Value', detail: '12 picks past real ADP' },
+        { code: 'sleeper-watch', label: 'Sleeper Watch', detail: 'Ranked 18 picks ahead of real ADP' },
+        { code: 'breakout', label: 'Breakout', detail: 'must be ignored' },
+      ],
+      action: {
+        code: 'take-now',
+        label: 'Take now',
+        reason: 'Uncalibrated ADP heuristic estimates a 31% chance of reaching pick 31.',
+        calibrated: false,
+      },
+      riskCaution: { message: 'Fresh questionable status from FantasyPros.' },
+    },
+  });
+  const sleeperWatch = Array.from({ length: 9 }, (_, index) => ({
+    player: { name: `${malicious} ${index}`, position: 'WR', team: 'SEA' },
+    summary: `Ranked ${20 + index} picks ahead of real ADP.`,
+    badges: [{ code: 'sleeper-watch', label: 'Sleeper Watch', detail: 'Market discount' }],
+    action: {
+      code: index % 2 ? 'can-wait' : 'take-now',
+      label: index % 2 ? 'Can wait' : 'Take now',
+      reason: `Uncalibrated timing reason ${index}`,
+      calibrated: false,
+    },
+    riskCaution: index === 0 ? { message: malicious } : null,
+  }));
+  const model = createRecommendationViewModel(response({
+    recommendations: [marketCandidate],
+    marketSignals: {
+      status: 'available',
+      calibrated: false,
+      method: 'Uncalibrated deterministic rank-versus-ADP market heuristic.',
+      scope: 'Counts cover only the bounded ranking frontier.',
+      source: {
+        name: 'DraftSheets 2026',
+        season: 2026,
+        targetSeason: 2026,
+        sameSeason: true,
+        asOf: '2026-09-01',
+      },
+      definitions: [
+        { code: 'value', label: 'Value', description: 'At least one league round past real ADP.' },
+        { code: 'sleeper-watch', label: 'Sleeper Watch', description: 'Round 7+ and rank beats real ADP by a league round.' },
+        { code: 'fade', label: 'Fade', description: 'Rank trails real ADP by a league round.' },
+        { code: 'breakout', label: 'Breakout', description: 'must be ignored' },
+      ],
+      trust: [
+        { code: 'ledger-complete', passed: true, message: 'Authoritative ledger complete.' },
+        { code: 'drafted-identities-resolved', passed: true, message: 'Drafted identities resolved.' },
+      ],
+      exclusions: [
+        { code: 'drafted', count: 24, message: '24 drafted players excluded.' },
+        { code: 'no-real-adp', count: 3, message: '3 players have no real ADP.' },
+      ],
+      sleeperWatch,
+    },
+  }), { leagueId: '10462193' });
+
+  assert.deepEqual(model.recommendations[0].badges, [
+    { code: 'value', label: 'Value', detail: '12 picks past real ADP' },
+    { code: 'sleeper-watch', label: 'Sleeper Watch', detail: 'Ranked 18 picks ahead of real ADP' },
+  ]);
+  assert.equal(model.recommendations[0].actionLabel, 'Take now');
+  assert.match(model.recommendations[0].actionReason, /31% chance/);
+  assert.match(model.recommendations[0].riskCaution, /questionable/);
+  assert.equal(model.decisionBrief.primaryAction, 'Take now');
+  assert.deepEqual(model.decisionBrief.primaryBadges, ['Value', 'Sleeper Watch']);
+  assert.equal(model.marketSignals.status, 'available');
+  assert.match(model.marketSignals.sourceLabel, /DraftSheets 2026 · season 2026 · as of 2026-09-01/);
+  assert.match(model.marketSignals.methodLabel, /uncalibrated/i);
+  assert.equal(model.marketSignals.sleeperWatch.length, 5);
+  assert.equal(model.marketSignals.definitions.length, 3);
+  assert.equal(model.marketSignals.definitions.some((item) => /breakout/i.test(item)), false);
+  assert.equal(model.marketSignals.exclusions.length, 2);
+  assert.ok(model.marketSignals.sleeperWatch[0].name.startsWith(malicious));
+});
+
+test('fails closed when market signals are malformed or unavailable', () => {
+  const malformed = createRecommendationViewModel(response({
+    marketSignals: {
+      status: 'available',
+      calibrated: true,
+      source: { sameSeason: false },
+      sleeperWatch: [{ player: { name: 'Must not render', position: 'WR' } }],
+    },
+  }), { leagueId: '10462193' });
+  assert.equal(malformed.marketSignals, null);
+
+  const importedTimestampOnly = createRecommendationViewModel(response({
+    marketSignals: {
+      status: 'available',
+      calibrated: false,
+      method: 'Uncalibrated market heuristic.',
+      source: {
+        name: 'Undated CSV',
+        season: 2026,
+        targetSeason: 2026,
+        sameSeason: true,
+        asOf: '2026-09-01T12:00:00Z',
+        asOfBasis: 'imported',
+      },
+      sleeperWatch: [{ player: { name: 'Must not render', position: 'WR' } }],
+    },
+  }), { leagueId: '10462193' });
+  assert.equal(importedTimestampOnly.marketSignals, null);
+
+  const mismatchedSourceDate = createRecommendationViewModel(response({
+    marketSignals: {
+      status: 'available',
+      calibrated: false,
+      method: 'Uncalibrated market heuristic.',
+      source: {
+        name: 'Wrong-year source',
+        season: 2026,
+        targetSeason: 2026,
+        sameSeason: true,
+        asOf: '2025-09-01',
+      },
+      sleeperWatch: [{ player: { name: 'Must not render', position: 'WR' } }],
+    },
+  }), { leagueId: '10462193' });
+  assert.equal(mismatchedSourceDate.marketSignals, null);
+
+  const unavailable = createRecommendationViewModel(response({
+    marketSignals: {
+      status: 'unavailable',
+      calibrated: false,
+      method: 'Uncalibrated deterministic rank-versus-ADP market heuristic.',
+      message: 'Same-season real ADP is unavailable.',
+      source: {
+        name: 'Old rankings',
+        season: 2025,
+        targetSeason: 2026,
+        sameSeason: false,
+        asOf: '2025-09-01',
+      },
+      definitions: [],
+      trust: [],
+      exclusions: [],
+      sleeperWatch: [],
+    },
+  }), { leagueId: '10462193' });
+  assert.equal(unavailable.marketSignals.status, 'unavailable');
+  assert.deepEqual(unavailable.marketSignals.sleeperWatch, []);
+  assert.match(unavailable.marketSignals.message, /unavailable/);
+});

@@ -5,6 +5,7 @@ Fantasy Football MCP Server - Multi-League Support
 
 import asyncio
 import json
+import math
 import os
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 
@@ -451,9 +452,19 @@ async def get_draft_rankings(
 
                                         if "draft_analysis" in element:
                                             draft = element["draft_analysis"]
-                                            player_info["average_draft_position"] = draft.get(
-                                                "average_pick", rank
-                                            )
+                                            average_pick = draft.get("average_pick")
+                                            if not isinstance(average_pick, bool):
+                                                try:
+                                                    numeric_average_pick = float(average_pick)
+                                                except (TypeError, ValueError):
+                                                    numeric_average_pick = math.nan
+                                                if (
+                                                    math.isfinite(numeric_average_pick)
+                                                    and numeric_average_pick > 0
+                                                ):
+                                                    player_info["average_draft_position"] = (
+                                                        numeric_average_pick
+                                                    )
                                             player_info["average_round"] = draft.get(
                                                 "average_round", "N/A"
                                             )

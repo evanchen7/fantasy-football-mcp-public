@@ -6,6 +6,7 @@ import asyncio
 import re
 import unicodedata
 from collections.abc import Awaitable, Callable, Mapping
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -309,6 +310,24 @@ def _profile_source_label(profile: Mapping[str, Any]) -> str:
     return "user-imported rankings profile"
 
 
+def _profile_market_source(profile: Mapping[str, Any], name: str) -> dict[str, Any]:
+    provenance = profile.get("provenance")
+    source_as_of = provenance.get("asOf") if isinstance(provenance, Mapping) else None
+    imported_at = profile.get("importedAt")
+    if isinstance(source_as_of, str) and source_as_of:
+        as_of = source_as_of
+        basis = "source"
+    else:
+        as_of = imported_at if isinstance(imported_at, str) else None
+        basis = "imported"
+    return {
+        "name": name,
+        "season": profile.get("season"),
+        "asOf": as_of,
+        "asOfBasis": basis,
+    }
+
+
 def _resolve_league_key(result: Mapping[str, Any], league_id: str) -> str:
     if result.get("status") == "error" or isinstance(result.get("error"), str):
         raise LiveDraftValidationError(
@@ -452,6 +471,7 @@ async def get_live_draft_recommendation(
         league_source = "user-imported league profile"
         season_value = profile.get("season")
         season = season_value if isinstance(season_value, int) else None
+        market_source = _profile_market_source(profile, rankings_source)
     else:
         # Keep all Yahoo calls serialized: concurrent 401 responses can race rotating token
         # refreshes. CPU-only scoring starts after releasing the Yahoo boundary.
@@ -495,6 +515,12 @@ async def get_live_draft_recommendation(
         rankings_source = "Yahoo pre-draft rankings"
         league_source = "Yahoo league info"
         season = None
+        market_source = {
+            "name": rankings_source,
+            "season": league_info.get("season"),
+            "asOf": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "asOfBasis": "retrieved",
+        }
 
     rankings = _sanitize_ranking_player_keys(rankings)
     rankings, enrichment, enrichment_warnings = await _enrich_with_fantasypros(
@@ -510,6 +536,7 @@ async def get_live_draft_recommendation(
         league_info,
         strategy=strategy,
         count=max(1, min(int(count), 20)),
+        market_source=market_source,
     )
     if isinstance(rankings_result, Mapping) and not rankings:
         ranking_error = rankings_result.get("message") or rankings_result.get("error")

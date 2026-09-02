@@ -446,6 +446,16 @@ def test_cockpit_roster_plan_and_recap_use_configured_slots_and_adp_only() -> No
     assert len(recap["decisions"]) == 2
     assert all(decision["basis"] == "uncalibrated ADP heuristic" for decision in recap["decisions"])
 
+    invalid_adp_rankings = rankings()
+    invalid_adp_rankings[2]["average_draft_position"] = True
+    invalid_adp_rankings[5]["average_draft_position"] = float("inf")
+    invalid_recap = LiveDraftRecommendationEngine(simulations=0).recommend(
+        live_context(),
+        invalid_adp_rankings,
+        {"teams": 4},
+    )["cockpit"]["recap"]
+    assert invalid_recap["decisions"] == []
+
 
 def test_blocked_cockpit_explains_readiness_without_candidate_availability() -> None:
     context = live_context()
@@ -804,3 +814,245 @@ def test_stale_state_degrades_recommendation() -> None:
 
     assert result["status"] == "degraded"
     assert result["critic"]["checks"]["stateFresh"] is False
+
+
+def test_market_sleeper_watch_is_bounded_transparent_and_deterministic() -> None:
+    observed_at = "2026-09-02T12:00:00Z"
+    candidate_pool = rankings()
+    for index, (name, adp) in enumerate(
+        [
+            ("Alpha Sleeper", 45.0),
+            ("Beta Sleeper", 44.0),
+            ("Gamma Sleeper", 43.0),
+            ("Delta Sleeper", 42.0),
+            ("Epsilon Sleeper", 41.0),
+            ("Zeta Sleeper", 40.0),
+        ],
+        start=13,
+    ):
+        candidate = {
+            "name": name,
+            "position": "WR",
+            "team": "SEA",
+            "rank": index,
+            "average_draft_position": adp,
+        }
+        if name == "Delta Sleeper":
+            candidate.update(
+                {
+                    "injury_status": "questionable",
+                    "injury_source": "FantasyPros",
+                    "injury_updated_at": observed_at,
+                    "injury_snapshot_at": observed_at,
+                    "injury_fresh": True,
+                }
+            )
+        candidate_pool.append(candidate)
+    candidate_pool.append(
+        {
+            "name": "Slipped Value",
+            "position": "TE",
+            "team": "DEN",
+            "rank": 2,
+            "average_draft_position": 2.5,
+        }
+    )
+    source = {
+        "name": "unit-test rankings",
+        "season": 2026,
+        "asOf": "2026-09-01",
+    }
+    now = datetime(2026, 9, 2, 12, 0, tzinfo=timezone.utc)
+    engine = LiveDraftRecommendationEngine(simulations=8, random_seed=19)
+
+    first = engine.recommend(
+        live_context(),
+        candidate_pool,
+        {"teams": 4},
+        count=20,
+        now=now,
+        market_source=source,
+    )
+    second = engine.recommend(
+        live_context(),
+        candidate_pool,
+        {"teams": 4},
+        count=20,
+        now=now,
+        market_source=source,
+    )
+
+    market = first["marketSignals"]
+    assert market == second["marketSignals"]
+    assert market["status"] == "available"
+    assert market["calibrated"] is False
+    assert "uncalibrated" in market["method"].lower()
+    assert market["source"] == {
+        "name": "unit-test rankings",
+        "season": 2026,
+        "targetSeason": 2026,
+        "sameSeason": True,
+        "asOf": "2026-09-01",
+        "asOfBasis": "source",
+    }
+    assert [item["player"]["name"] for item in market["sleeperWatch"]] == [
+        "Alpha Sleeper",
+        "Beta Sleeper",
+        "Gamma Sleeper",
+        "Delta Sleeper",
+        "Epsilon Sleeper",
+    ]
+    assert market["sleeperWatch"][0]["discountPicks"] == 32.0
+    assert market["sleeperWatch"][0]["discountRounds"] == 8.0
+    assert market["sleeperWatch"][0]["marketRound"] == 12
+    assert market["sleeperWatch"][0]["action"]["code"] == "can-wait"
+    delta = next(
+        item
+        for item in market["sleeperWatch"]
+        if item["player"]["name"] == "Delta Sleeper"
+    )
+    assert "questionable" in delta["riskCaution"]["message"]
+    exclusions = {item["code"]: item for item in market["exclusions"]}
+    assert exclusions["drafted"]["count"] == 6
+    assert exclusions["unresolved-drafted-identity"]["count"] == 0
+    assert exclusions["no-real-adp"]["count"] == 0
+    assert exclusions["outside-displayed-frontier"]["count"] == 1
+    slipped = next(
+        item
+        for item in first["recommendations"]
+        if item["player"]["name"] == "Slipped Value"
+    )
+    assert slipped["decisionSignals"]["action"]["code"] == "take-now"
+    assert {badge["code"] for badge in slipped["decisionSignals"]["badges"]} == {
+        "value"
+    }
+
+
+@pytest.mark.parametrize(
+    "invalid_adp",
+    [None, True, False, float("nan"), float("inf"), float("-inf")],
+)
+def test_market_signals_never_treat_rank_fallback_as_real_adp(
+    invalid_adp: object,
+) -> None:
+    candidate_pool = [
+        *rankings()[:6],
+        {
+            "name": "No Market ADP",
+            "position": "WR",
+            "team": "SEA",
+            "rank": 40,
+            "average_draft_position": invalid_adp,
+        },
+    ]
+
+    result = LiveDraftRecommendationEngine(simulations=0).recommend(
+        live_context(),
+        candidate_pool,
+        {"teams": 4},
+        count=10,
+        now=datetime(2026, 9, 2, tzinfo=timezone.utc),
+        market_source={"name": "test", "season": 2026, "asOf": "2026-09-01"},
+    )
+
+    player = result["recommendations"][0]
+    assert player["player"]["name"] == "No Market ADP"
+    assert player["player"]["adp"] is None
+    assert player["specialistDetails"]["value"]["adpAvailable"] is False
+    assert player["specialistDetails"]["value"]["adpDelta"] is None
+    assert player["decisionSignals"]["badges"] == []
+    assert player["decisionSignals"]["action"]["code"] == "timing-unknown"
+    assert result["marketSignals"]["status"] == "unavailable"
+    exclusions = {
+        item["code"]: item for item in result["marketSignals"]["exclusions"]
+    }
+    assert exclusions["no-real-adp"]["count"] == 1
+
+
+def test_sleeper_watch_fails_closed_for_ledger_identity_and_source_season() -> None:
+    sleeper = {
+        "name": "Late Market Target",
+        "position": "WR",
+        "team": "SEA",
+        "rank": 13,
+        "average_draft_position": 40.0,
+    }
+    source = {"name": "test", "season": 2026, "asOf": "2026-09-01"}
+    now = datetime(2026, 9, 2, tzinfo=timezone.utc)
+    engine = LiveDraftRecommendationEngine(simulations=0)
+
+    incomplete = live_context()
+    incomplete["picks"] = [pick for pick in incomplete["picks"] if pick["pickNumber"] != 3]
+    blocked = engine.recommend(
+        incomplete,
+        [*rankings(), sleeper],
+        {"teams": 4},
+        now=now,
+        market_source=source,
+    )
+    assert blocked["status"] == "blocked"
+    assert blocked["marketSignals"]["status"] == "blocked"
+    assert blocked["marketSignals"]["sleeperWatch"] == []
+    assert next(
+        item
+        for item in blocked["marketSignals"]["trust"]
+        if item["code"] == "ledger-complete"
+    )["passed"] is False
+    assert next(
+        item
+        for item in blocked["marketSignals"]["trust"]
+        if item["code"] == "drafted-identities-resolved"
+    )["passed"] is False
+
+    unresolved_pool = [*rankings()[1:], sleeper]
+    unresolved = engine.recommend(
+        live_context(),
+        unresolved_pool,
+        {"teams": 4},
+        now=now,
+        market_source=source,
+    )
+    assert unresolved["status"] == "degraded"
+    assert unresolved["marketSignals"]["status"] == "blocked"
+    assert unresolved["marketSignals"]["sleeperWatch"] == []
+    exclusions = {
+        item["code"]: item for item in unresolved["marketSignals"]["exclusions"]
+    }
+    assert exclusions["unresolved-drafted-identity"]["count"] == 1
+
+    wrong_season = engine.recommend(
+        live_context(),
+        [*rankings(), sleeper],
+        {"teams": 4},
+        now=now,
+        market_source={"name": "old rankings", "season": 2025, "asOf": "2025-09-01"},
+    )
+    assert wrong_season["marketSignals"]["status"] == "unavailable"
+    assert wrong_season["marketSignals"]["source"]["sameSeason"] is False
+    assert wrong_season["marketSignals"]["sleeperWatch"] == []
+
+    imported_without_source_date = engine.recommend(
+        live_context(),
+        [*rankings(), sleeper],
+        {"teams": 4},
+        now=now,
+        market_source={
+            "name": "undated import",
+            "season": 2026,
+            "asOf": "2026-09-01T12:00:00Z",
+            "asOfBasis": "imported",
+        },
+    )
+    assert imported_without_source_date["marketSignals"]["status"] == "unavailable"
+    assert imported_without_source_date["marketSignals"]["source"]["sameSeason"] is True
+    assert imported_without_source_date["marketSignals"]["sleeperWatch"] == []
+
+    mismatched_source_date = engine.recommend(
+        live_context(),
+        [*rankings(), sleeper],
+        {"teams": 4},
+        now=now,
+        market_source={"name": "bad date", "season": 2026, "asOf": "2025-09-01"},
+    )
+    assert mismatched_source_date["marketSignals"]["status"] == "unavailable"
+    assert mismatched_source_date["marketSignals"]["source"]["asOf"] is None

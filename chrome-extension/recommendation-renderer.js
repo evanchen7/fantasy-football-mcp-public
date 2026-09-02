@@ -14,6 +14,24 @@
     return node;
   }
 
+  function renderBadges(documentRef, badges) {
+    const row = element(documentRef, 'div', 'decision-badges');
+    for (const badge of Array.isArray(badges) ? badges.slice(0, 3) : []) {
+      const code = typeof badge === 'string' ? '' : badge?.code;
+      const label = typeof badge === 'string' ? badge : badge?.label;
+      const detail = typeof badge === 'string' ? '' : badge?.detail;
+      const node = element(
+        documentRef,
+        'span',
+        `decision-badge${code ? ` decision-badge--${code}` : ''}`,
+        label,
+      );
+      if (detail) node.setAttribute('title', detail);
+      row.appendChild(node);
+    }
+    return row;
+  }
+
   function renderDraftContext(documentRef, context) {
     const section = element(documentRef, 'section', 'draft-context');
     section.setAttribute('aria-label', 'Draft context');
@@ -40,6 +58,17 @@
     primary.appendChild(element(documentRef, 'span', 'decision-label', brief.primaryLabel));
     primary.appendChild(element(documentRef, 'strong', 'decision-name', brief.primaryName));
     primary.appendChild(element(documentRef, 'span', 'decision-meta', brief.primaryMeta));
+    if (brief.primaryBadges?.length) {
+      primary.appendChild(renderBadges(documentRef, brief.primaryBadges));
+    }
+    if (brief.primaryAction) {
+      primary.appendChild(element(
+        documentRef,
+        'span',
+        'decision-action decision-action--primary',
+        brief.primaryAction,
+      ));
+    }
     section.appendChild(primary);
 
     if (brief.fallbacks?.length) {
@@ -69,6 +98,19 @@
     heading.appendChild(element(documentRef, 'strong', 'score', recommendation.scoreLabel));
     card.appendChild(heading);
 
+    if (recommendation.badges?.length) {
+      card.appendChild(renderBadges(documentRef, recommendation.badges));
+    }
+
+    if (recommendation.actionLabel) {
+      const action = element(documentRef, 'p', 'decision-action');
+      action.appendChild(element(documentRef, 'strong', '', recommendation.actionLabel));
+      if (recommendation.actionReason) {
+        action.appendChild(element(documentRef, 'span', '', ` · ${recommendation.actionReason}`));
+      }
+      card.appendChild(action);
+    }
+
     if (recommendation.valueLabel) {
       card.appendChild(element(documentRef, 'p', 'value-label', recommendation.valueLabel));
     }
@@ -80,6 +122,9 @@
     card.appendChild(metrics);
     card.appendChild(element(documentRef, 'p', 'roster-impact', recommendation.rosterImpact));
     card.appendChild(element(documentRef, 'p', 'risk-label', recommendation.riskLabel));
+    if (recommendation.riskCaution) {
+      card.appendChild(element(documentRef, 'p', 'market-risk-caution', recommendation.riskCaution));
+    }
     if (recommendation.riskSourceLabel) {
       card.appendChild(element(documentRef, 'p', 'risk-source', recommendation.riskSourceLabel));
     }
@@ -93,6 +138,65 @@
       card.appendChild(list(documentRef, recommendation.reasoning, 'reasoning-list'));
     }
     return card;
+  }
+
+  function renderMarketSignals(documentRef, market) {
+    if (!market || !['available', 'blocked', 'unavailable'].includes(market.status)) return null;
+    const section = element(
+      documentRef,
+      'section',
+      `market-signals market-signals--${market.status}`,
+    );
+    section.setAttribute('aria-label', 'Sleeper Watch market signals');
+    section.appendChild(element(documentRef, 'h2', '', 'Sleeper Watch'));
+    section.appendChild(element(documentRef, 'p', 'market-message', market.message));
+    if (market.sourceLabel) {
+      section.appendChild(element(documentRef, 'p', 'market-source', market.sourceLabel));
+    }
+    if (market.methodLabel) {
+      section.appendChild(element(documentRef, 'p', 'market-method', market.methodLabel));
+    }
+    if (market.scope) section.appendChild(element(documentRef, 'p', 'market-scope', market.scope));
+
+    if (market.sleeperWatch?.length) {
+      const watchList = element(documentRef, 'div', 'sleeper-watch-list');
+      for (const sleeper of market.sleeperWatch.slice(0, 5)) {
+        const item = element(documentRef, 'article', 'sleeper-watch-item');
+        const identity = element(documentRef, 'div', 'sleeper-watch-identity');
+        identity.appendChild(element(documentRef, 'strong', '', sleeper.name));
+        identity.appendChild(element(documentRef, 'span', '', sleeper.playerMeta));
+        item.appendChild(identity);
+        if (sleeper.badges?.length) item.appendChild(renderBadges(documentRef, sleeper.badges));
+        item.appendChild(element(documentRef, 'p', 'market-summary', sleeper.summary));
+        if (sleeper.actionLabel) {
+          item.appendChild(element(
+            documentRef,
+            'p',
+            'decision-action',
+            `${sleeper.actionLabel}${sleeper.actionReason ? ` · ${sleeper.actionReason}` : ''}`,
+          ));
+        }
+        if (sleeper.riskCaution) {
+          item.appendChild(element(documentRef, 'p', 'market-risk-caution', sleeper.riskCaution));
+        }
+        watchList.appendChild(item);
+      }
+      section.appendChild(watchList);
+    }
+
+    const explanations = [
+      ['Definitions', market.definitions],
+      ['Trust checks', market.trust],
+      ['Bounded exclusions', market.exclusions],
+    ];
+    for (const [label, values] of explanations) {
+      if (!values?.length) continue;
+      const details = element(documentRef, 'details', 'market-details');
+      details.appendChild(element(documentRef, 'summary', '', label));
+      details.appendChild(list(documentRef, values, 'market-detail-list'));
+      section.appendChild(details);
+    }
+    return section;
   }
 
   function renderAdvisoryCritic(documentRef, critic) {
@@ -168,6 +272,9 @@
     if (model.decisionBrief) {
       root.appendChild(renderDecisionBrief(documentRef, model.decisionBrief));
     }
+
+    const marketSignals = renderMarketSignals(documentRef, model.marketSignals);
+    if (marketSignals) root.appendChild(marketSignals);
 
     if (model.ledgerIssues.length) {
       const blockers = element(documentRef, 'section', 'notice notice--blocked');

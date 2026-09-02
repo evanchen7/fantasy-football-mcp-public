@@ -259,6 +259,14 @@ async def test_local_profile_avoids_yahoo_and_adds_fantasypros_evidence(
         item for item in result["recommendations"] if item["player"]["name"] == "De'Von Achane"
     )
     assert achane["risk"]["status"] == "questionable"
+    assert result["marketSignals"]["source"] == {
+        "name": "user-imported DraftSheets 2026",
+        "season": 2026,
+        "targetSeason": 2026,
+        "sameSeason": True,
+        "asOf": "2026-09-01",
+        "asOfBasis": "source",
+    }
 
 
 @pytest.mark.asyncio
@@ -821,6 +829,7 @@ async def test_service_combines_local_state_with_yahoo_rankings(tmp_path: Path) 
         if name == "ff_get_league_info":
             return {
                 "teams": 4,
+                "season": 2026,
                 "scoring_type": "head",
                 "roster_positions": [{"position": "QB", "count": 1}],
             }
@@ -842,6 +851,10 @@ async def test_service_combines_local_state_with_yahoo_rankings(tmp_path: Path) 
     assert {name for name, _ in calls} == {"ff_get_draft_rankings", "ff_get_league_info"}
     ranking_call = next(arguments for name, arguments in calls if name == "ff_get_draft_rankings")
     assert ranking_call["count"] == 200
+    assert result["marketSignals"]["status"] == "available"
+    assert result["marketSignals"]["source"]["name"] == "Yahoo pre-draft rankings"
+    assert result["marketSignals"]["source"]["season"] == 2026
+    assert result["marketSignals"]["source"]["asOfBasis"] == "retrieved"
 
 
 @pytest.mark.asyncio

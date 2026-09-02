@@ -21,6 +21,7 @@ from datetime import datetime, timezone
 from functools import lru_cache
 from typing import Any
 
+from src.agents.draft_market_signals import build_market_decision_payload
 from src.services.yahoo_player_identity import normalize_yahoo_player_key
 
 _POSITION_ALIASES = {
@@ -125,6 +126,18 @@ def _number(value: Any, default: float) -> float:
         return result if math.isfinite(result) else default
     except (TypeError, ValueError):
         return default
+
+
+def _optional_positive_number(value: Any) -> float | None:
+    """Return an explicitly supplied positive finite number, never a fallback."""
+
+    if isinstance(value, bool):
+        return None
+    try:
+        result = float(value)
+    except (TypeError, ValueError):
+        return None
+    return result if math.isfinite(result) and result > 0 else None
 
 
 def _position(value: Any) -> str:
@@ -375,7 +388,13 @@ class Candidate:
     position: str
     team: str
     rank: float
-    adp: float
+    adp: float | None
+
+    @property
+    def effective_adp(self) -> float:
+        """Keep legacy scoring bounded while preserving whether market ADP existed."""
+
+        return self.adp if self.adp is not None else self.rank
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, Any], fallback_rank: int) -> Candidate | None:
@@ -384,7 +403,7 @@ class Candidate:
         if not name or not position:
             return None
         rank = _number(value.get("rank"), fallback_rank)
-        adp = _number(value.get("average_draft_position"), rank)
+        adp = _optional_positive_number(value.get("average_draft_position"))
         return cls(dict(value), name, position, str(value.get("team") or ""), rank, adp)
 
 
@@ -395,8 +414,9 @@ class PlayerValueAgent:
         self, candidate: Candidate, current_pick: int, pool_size: int
     ) -> tuple[float, dict[str, Any]]:
         rank_quality = max(0.0, 100.0 - ((candidate.rank - 1) / max(1, pool_size)) * 100.0)
-        adp_delta = current_pick - candidate.adp
-        adp_value = max(0.0, min(100.0, 50.0 + adp_delta * 4.0))
+        adp_delta = current_pick - candidate.adp if candidate.adp is not None else None
+        effective_delta = current_pick - candidate.effective_adp
+        adp_value = max(0.0, min(100.0, 50.0 + effective_delta * 4.0))
         score = 0.72 * rank_quality + 0.28 * adp_value
         if candidate.rank <= 12:
             tier = "elite"
@@ -409,7 +429,9 @@ class PlayerValueAgent:
         return score, {
             "rank": candidate.rank,
             "adp": candidate.adp,
-            "adpDelta": round(adp_delta, 2),
+            "adpAvailable": candidate.adp is not None,
+            "adpDelta": round(adp_delta, 2) if adp_delta is not None else None,
+            "adpBasis": "real-market-adp" if candidate.adp is not None else "rank-fallback",
             "tier": tier,
         }
 
@@ -561,8 +583,14 @@ class OpponentModelAgent:
             probability = 0.5
             basis = "unknown user draft slot"
         else:
-            probability = _inverse_logistic((next_user_pick - candidate.adp) / 6.0)
-            basis = "heuristic from ADP and picks until the next user turn"
+            probability = _inverse_logistic(
+                (next_user_pick - candidate.effective_adp) / 6.0
+            )
+            basis = (
+                "heuristic from real ADP and picks until the next user turn"
+                if candidate.adp is not None
+                else "rank fallback because real ADP is unavailable"
+            )
         urgency = (1.0 - probability) * 100.0
         return urgency, {
             "returnProbability": round(probability, 4),
@@ -719,7 +747,9 @@ class ScenarioSimulatorAgent:
                 selected = False
                 for offset in range(intervening):
                     pick_number = current_pick + offset
-                    pressure = _inverse_logistic((candidate.adp - pick_number) / 5.0)
+                    pressure = _inverse_logistic(
+                        (candidate.effective_adp - pick_number) / 5.0
+                    )
                     hazard = min(0.72, 0.035 + pressure * 0.22)
                     if rng.random() < hazard:
                         selected = True
@@ -787,6 +817,7 @@ class LiveDraftRecommendationEngine:
         strategy: str = "balanced",
         count: int = 5,
         now: datetime | None = None,
+        market_source: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         started = time.perf_counter()
         league = dict(league_info or {})
@@ -818,6 +849,16 @@ class LiveDraftRecommendationEngine:
             for candidate in ranking_candidates
             if candidate is not None
         )
+        _, initial_market_signals = build_market_decision_payload(
+            state,
+            [],
+            source=market_source,
+            target_season=reference_time.year,
+            ranking_rows=len(rankings),
+            drafted_count=0,
+            unresolved_drafted=0,
+            counts_trustworthy=state["health"]["complete"],
+        )
         base = {
             "source": "live-draft-specialist-suite",
             "strategy": strategy if strategy in _STRATEGY_WEIGHTS else "balanced",
@@ -831,6 +872,7 @@ class LiveDraftRecommendationEngine:
                 "llmOnRequestPath": False,
             },
             "warnings": warnings,
+            "marketSignals": initial_market_signals,
             "cockpit": self._cockpit(
                 state,
                 rankings,
@@ -859,15 +901,13 @@ class LiveDraftRecommendationEngine:
             )
             return self._empty_result(base, "degraded", self._draft_advice(state), started)
 
+        valid_candidates = [candidate for candidate in ranking_candidates if candidate is not None]
         candidates: list[Candidate] = []
+        drafted_count = 0
         unresolved_drafted: list[str] = []
-        for index, raw in enumerate(rankings, start=1):
-            if not isinstance(raw, Mapping):
-                continue
-            candidate = Candidate.from_mapping(raw, index)
-            if candidate is None:
-                continue
+        for candidate in valid_candidates:
             if any(_same_player(pick, candidate.raw) for pick in state["picks"]):
+                drafted_count += 1
                 continue
             candidates.append(candidate)
         for pick in state["picks"]:
@@ -879,6 +919,15 @@ class LiveDraftRecommendationEngine:
             )
         if not candidates:
             warnings.append("Every ranking entry was drafted or invalid")
+            _, base["marketSignals"] = build_market_decision_payload(
+                state,
+                [],
+                source=market_source,
+                target_season=reference_time.year,
+                ranking_rows=len(rankings),
+                drafted_count=drafted_count,
+                unresolved_drafted=len(unresolved_drafted),
+            )
             return self._empty_result(base, "degraded", self._draft_advice(state), started)
 
         dynamics_agent = DraftDynamicsAgent(state["picks"])
@@ -939,6 +988,7 @@ class LiveDraftRecommendationEngine:
                         ),
                         "rank": candidate.rank,
                         "adp": candidate.adp,
+                        "adpAvailable": candidate.adp is not None,
                         "byeWeek": candidate.raw.get("bye") or candidate.raw.get("bye_week"),
                     },
                     "overallScore": round(overall, 2),
@@ -960,6 +1010,16 @@ class LiveDraftRecommendationEngine:
                     },
                 }
             )
+
+        evaluated, base["marketSignals"] = build_market_decision_payload(
+            state,
+            evaluated,
+            source=market_source,
+            target_season=reference_time.year,
+            ranking_rows=len(rankings),
+            drafted_count=drafted_count,
+            unresolved_drafted=len(unresolved_drafted),
+        )
 
         evaluated.sort(
             key=lambda item: (-item["overallScore"], item["player"]["rank"], item["player"]["name"])
@@ -1032,8 +1092,13 @@ class LiveDraftRecommendationEngine:
         risk: Mapping[str, Any],
         opponent: Mapping[str, Any],
     ) -> list[str]:
+        market_context = (
+            f"real ADP {candidate.adp:g}"
+            if candidate.adp is not None
+            else "real ADP unavailable; rank fallback used only for scoring"
+        )
         reasons = [
-            f"{value['tier']} value at rank {int(candidate.rank)} (ADP {candidate.adp:g})",
+            f"{value['tier']} value at rank {int(candidate.rank)} ({market_context})",
             roster["impact"],
         ]
         if dynamics["runDetected"]:
@@ -1072,7 +1137,12 @@ class LiveDraftRecommendationEngine:
             "team": str(player.get("team") or "")[:16],
             "score": round(_number(raw_score, 0.0), 2),
             "rank": round(_number(player.get("rank"), 0.0), 2),
-            "adp": round(_number(player.get("adp"), 0.0), 2),
+            "adp": (
+                round(_number(player.get("adp"), 0.0), 2)
+                if player.get("adpAvailable") is True
+                else None
+            ),
+            "adpAvailable": player.get("adpAvailable") is True,
             "tier": str(value.get("tier") or "unknown")[:24],
         }
         player_key = normalize_yahoo_player_key(
@@ -1369,8 +1439,8 @@ class LiveDraftRecommendationEngine:
             raw_adp = match.get("average_draft_position")
             if raw_adp is None:
                 raw_adp = match.get("adp")
-            adp = _number(raw_adp, math.nan)
-            if not math.isfinite(adp):
+            adp = _optional_positive_number(raw_adp)
+            if adp is None:
                 continue
             delta = pick["pickNumber"] - adp
             label = "value" if delta >= 8 else ("reach" if delta <= -8 else "near ADP")

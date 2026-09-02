@@ -14,6 +14,16 @@
     'suspended',
     'day-to-day',
   ]);
+  const MARKET_BADGES = new Map([
+    ['value', 'Value'],
+    ['sleeper-watch', 'Sleeper Watch'],
+    ['fade', 'Fade'],
+  ]);
+  const MARKET_ACTIONS = new Map([
+    ['take-now', 'Take now'],
+    ['can-wait', 'Can wait'],
+    ['timing-unknown', 'Timing unknown'],
+  ]);
 
   function safeText(value, maximum = 300, fallback = '') {
     if (typeof value !== 'string' && typeof value !== 'number') return fallback;
@@ -119,6 +129,162 @@
     };
   }
 
+  function marketBadges(values) {
+    if (!Array.isArray(values)) return [];
+    const result = [];
+    for (const value of values.slice(0, 12)) {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) continue;
+      const code = safeText(value.code, 40).toLowerCase();
+      const label = MARKET_BADGES.get(code);
+      if (!label || result.some((badge) => badge.code === code)) continue;
+      result.push({
+        code,
+        label,
+        detail: safeText(value.detail, 180),
+      });
+      if (result.length >= 3) break;
+    }
+    return result;
+  }
+
+  function marketAction(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+    const code = safeText(value.code, 40).toLowerCase();
+    const label = MARKET_ACTIONS.get(code);
+    if (!label || value.calibrated !== false) return null;
+    return {
+      code,
+      label,
+      reason: safeText(value.reason, 300, 'Timing explanation unavailable.'),
+    };
+  }
+
+  function marketRiskCaution(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return '';
+    return safeText(value.message, 240);
+  }
+
+  function marketSourceLabel(source) {
+    if (!source || typeof source !== 'object' || Array.isArray(source)) return '';
+    const name = safeText(source.name, 120);
+    const season = finiteNumber(source.season);
+    const asOf = isoTimestamp(source.asOf);
+    if (!name) return '';
+    const parts = [name];
+    if (Number.isInteger(season)) parts.push(`season ${season}`);
+    if (asOf) {
+      const basis = safeText(source.asOfBasis, 20, 'source');
+      const prefix = basis === 'imported'
+        ? 'imported'
+        : (basis === 'retrieved' ? 'retrieved' : 'as of');
+      parts.push(`${prefix} ${asOf}`);
+    }
+    return parts.join(' · ');
+  }
+
+  function marketDefinition(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return '';
+    const code = safeText(value.code, 40).toLowerCase();
+    const label = MARKET_BADGES.get(code);
+    const description = safeText(value.description, 300);
+    return label && description ? `${label}: ${description}` : '';
+  }
+
+  function marketSleeper(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+    const player = value.player && typeof value.player === 'object' && !Array.isArray(value.player)
+      ? value.player
+      : {};
+    const name = safeText(player.name, 120);
+    if (!name) return null;
+    const position = safeText(player.position, 16, 'Position unknown');
+    const team = safeText(player.team, 16, 'NFL team unknown');
+    const action = marketAction(value.action);
+    return {
+      name,
+      playerMeta: `${position} · ${team}`,
+      summary: safeText(value.summary, 300, 'Market discount details unavailable.'),
+      badges: marketBadges(value.badges),
+      actionLabel: action?.label || '',
+      actionReason: action?.reason || '',
+      riskCaution: marketRiskCaution(value.riskCaution),
+    };
+  }
+
+  function marketSignals(value) {
+    if (
+      !value ||
+      typeof value !== 'object' ||
+      Array.isArray(value) ||
+      value.calibrated !== false ||
+      !['available', 'blocked', 'unavailable'].includes(value.status)
+    ) return null;
+    const source = value.source && typeof value.source === 'object' && !Array.isArray(value.source)
+      ? value.source
+      : {};
+    const sourceSeason = finiteNumber(source.season);
+    const targetSeason = finiteNumber(source.targetSeason);
+    const asOfBasis = safeText(source.asOfBasis, 20, 'source');
+    const marketAsOf = isoTimestamp(source.asOf);
+    const marketDateReady = Boolean(marketAsOf)
+      && new Date(marketAsOf).getUTCFullYear() === sourceSeason
+      && ['source', 'retrieved'].includes(asOfBasis);
+    const sameSeasonReady = source.sameSeason === true
+      && Number.isInteger(sourceSeason)
+      && sourceSeason === targetSeason;
+    const sourceLabel = marketSourceLabel(source);
+    if (value.status === 'available' && (!sameSeasonReady || !marketDateReady || !sourceLabel)) {
+      return null;
+    }
+    const method = safeText(value.method, 300);
+    const definitions = uniqueStrings(
+      (Array.isArray(value.definitions) ? value.definitions : []).map(marketDefinition),
+      3,
+      300,
+    );
+    const trust = uniqueStrings(
+      (Array.isArray(value.trust) ? value.trust : []).slice(0, 4).map((item) => {
+        if (!item || typeof item !== 'object' || Array.isArray(item)) return '';
+        const message = safeText(item.message, 300);
+        if (!message) return '';
+        return `${item.passed === true ? 'Ready' : 'Blocked'}: ${message}`;
+      }),
+      4,
+      320,
+    );
+    const exclusions = uniqueStrings(
+      (Array.isArray(value.exclusions) ? value.exclusions : []).slice(0, 4).map((item) => (
+        item && typeof item === 'object' && !Array.isArray(item)
+          ? safeText(item.message, 300)
+          : ''
+      )),
+      4,
+      300,
+    );
+    const sleepers = value.status === 'available' && Array.isArray(value.sleeperWatch)
+      ? value.sleeperWatch.slice(0, 5).map(marketSleeper).filter(Boolean)
+      : [];
+    return {
+      status: value.status,
+      message: safeText(
+        value.message,
+        300,
+        value.status === 'available'
+          ? 'Sleeper Watch is ready.'
+          : `Sleeper Watch is ${value.status}.`,
+      ),
+      sourceLabel,
+      methodLabel: method && /uncalibrated/i.test(method)
+        ? method
+        : 'Uncalibrated market method details unavailable.',
+      scope: safeText(value.scope, 300),
+      definitions,
+      trust,
+      exclusions,
+      sleeperWatch: sleepers,
+    };
+  }
+
   function rosterSummary(roster) {
     const players = Array.isArray(roster) ? roster.slice(0, 40) : [];
     const counts = new Map();
@@ -168,7 +334,7 @@
   function decisionBrief(state, recommendations) {
     if (!recommendations.length) return null;
     const primary = recommendations[0];
-    return {
+    const result = {
       ...turnStatus(state?.picksUntilUserTurn),
       primaryLabel: 'Recommended now',
       primaryName: primary.name,
@@ -178,6 +344,11 @@
         meta: candidate.playerMeta,
       })),
     };
+    if (primary.actionLabel) result.primaryAction = primary.actionLabel;
+    if (primary.badges?.length) {
+      result.primaryBadges = primary.badges.map((badge) => badge.label);
+    }
+    return result;
   }
 
   function ledgerIssues(health) {
@@ -301,15 +472,18 @@
     const playerTeam = safeText(item?.player?.team, 16, 'NFL team unknown');
     const overallScore = finiteNumber(item?.overallScore);
     const rank = finiteNumber(item?.player?.rank);
-    const adp = finiteNumber(item?.player?.adp);
+    const adp = item?.player?.adpAvailable === false
+      ? null
+      : finiteNumber(item?.player?.adp);
     const byeWeek = finiteNumber(item?.player?.byeWeek);
     const tier = safeText(item?.specialistDetails?.value?.tier, 30);
     const valueParts = [
       rank === null ? '' : `Rank ${Number.isInteger(rank) ? rank : rank.toFixed(1)}`,
-      adp === null ? '' : `ADP ${Number.isInteger(adp) ? adp : adp.toFixed(1)}`,
+      adp === null ? 'ADP unavailable' : `ADP ${Number.isInteger(adp) ? adp : adp.toFixed(1)}`,
       tier ? `${tier.charAt(0).toUpperCase()}${tier.slice(1)} tier` : '',
       byeWeek === null ? '' : `Bye ${Math.trunc(byeWeek)}`,
     ].filter(Boolean);
+    const action = marketAction(item?.decisionSignals?.action);
     return {
       rankLabel: String(index + 1),
       name: safeText(item?.player?.name, 120, 'Unknown player'),
@@ -330,6 +504,10 @@
       riskSourceLabel,
       recentNews,
       reasoning: uniqueStrings(Array.isArray(item?.reasoning) ? item.reasoning : [], 6),
+      badges: marketBadges(item?.decisionSignals?.badges),
+      actionLabel: action?.label || '',
+      actionReason: action?.reason || '',
+      riskCaution: marketRiskCaution(item?.decisionSignals?.riskCaution),
     };
   }
 
@@ -345,6 +523,7 @@
       degradations: [],
       decisionBrief: null,
       recommendations: [],
+      marketSignals: null,
       advisoryCritic: null,
       contingency: [],
       emptyMessage: 'No recommendation is available.',
@@ -399,6 +578,7 @@
         }))
       : [];
     model.decisionBrief = decisionBrief(response.state, model.recommendations);
+    model.marketSignals = marketSignals(response.marketSignals);
     const normalizedAdvisoryCritic = mode === 'success' || mode === 'degraded'
       ? advisoryCritic(response.advisoryCritic)
       : null;

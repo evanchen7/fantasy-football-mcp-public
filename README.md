@@ -142,12 +142,21 @@ The easiest interfaces are:
 - **Firefox Draft Assistant:** a persistent top-five recommendation sidebar next to Yahoo. Its at-a-glance decision brief shows whether you are on the clock, next, or a known number of picks away, followed by the primary recommendation and two immediate fallbacks. A league-specific personal queue stays in extension storage and can optionally send deduplicated browser notifications only when the authoritative ledger says you are next or on the clock. Press plain **R** outside a form control to refresh manually. Chrome users should use the dashboard.
 - **Full dashboard:** the same clock-aware decision brief plus a live draft cockpit: personal queue, position/tier board, conservative/balanced/aggressive sensitivity, position-run alerts, configured roster-slot gaps, fallback tiers, pre-draft readiness checks, two-to-three player comparison, and a value/reach recap. It also retains up to twenty detailed candidates, recent picks, specialist scores, critic checks, simulations, and source diagnostics. The prior cockpit remains visible while a refresh is computing.
 
+Both views show the same transparent market-decision signals:
+
+- **Value** means the current pick is at least one league round later than the player's explicitly supplied market ADP.
+- **Sleeper Watch** means that real ADP is in Round 7 or later and the ranking source places the player at least one league round ahead of that ADP. It is a rank-versus-market discount, not a breakout or performance prediction.
+- **Fade** means source rank trails real ADP by at least one league round. It is a caution, not a command to avoid the player.
+- **Take now** means the uncalibrated ADP heuristic estimates less than a 50% chance that the player returns at your next pick; **Can wait** means 50% or more. The card always retains the raw rank, ADP, and estimated-return values behind that label.
+
+These labels require real ADP, a same-season source date (or a same-season Yahoo retrieval date), a complete authoritative ledger, and conservative resolution of every drafted identity. A local import timestamp alone is diagnostic and does not prove that an undated sheet's ADP is current. Rank may still be used as an internal scoring fallback when ADP is absent, but it is never presented as market ADP and no timing badge is invented. Sleeper Watch shows at most five deterministically ordered players from the supplied ranking frontier (up to 500 rows), reports known drafted/unresolved/no-ADP/hidden counts, and marks counts unknown when the ledger cannot support them. A risk caution appears only for fresh attributed injury or structured-news evidence; missing or stale evidence remains unknown.
+
 An MCP client can use the same state explicitly. The safe order is:
 
 1. Call `ff_get_live_draft_state` with the popup's `league_id` and inspect its ledger/identity warnings.
 2. Only when that state is ready, call `ff_get_live_draft_recommendation` with the same `league_id`.
 
-When using Yahoo fallback instead of a local profile, a validated Yahoo `league_key` may also be supplied. Confidence, opponent-return probability, and scenario probability are uncalibrated heuristics; injury/news evidence that is missing or stale remains **unknown**, never healthy.
+When using Yahoo fallback instead of a local profile, a validated Yahoo `league_key` may also be supplied. The response labels whether market metadata came from the imported source date, import time, or a fresh Yahoo retrieval. Confidence, opponent-return probability, scenario probability, market timing, and Sleeper Watch are uncalibrated heuristics; injury/news evidence that is missing or stale remains **unknown**, never healthy.
 
 ## Instant Mock Drafts and repeated mocks
 
