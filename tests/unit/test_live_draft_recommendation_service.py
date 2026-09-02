@@ -22,6 +22,30 @@ from src.services.local_draft_profile_store import (
 from tests.unit.test_live_draft_recommender import live_context, rankings
 
 
+def test_ranking_boundary_keeps_only_one_canonical_yahoo_player_key() -> None:
+    sanitized = recommendation_service._sanitize_ranking_player_keys(
+        [
+            {"name": "One", "player_key": "461.p.33536"},
+            {
+                "name": "Two",
+                "player_key": "https://evil.test/?player_key=461.p.99999&auth=secret",
+            },
+            {
+                "name": "Three",
+                "player_key": "461.p.33536",
+                "playerKey": "461.p.99999",
+            },
+        ]
+    )
+
+    assert sanitized == [
+        {"name": "One", "player_key": "461.p.33536"},
+        {"name": "Two"},
+        {"name": "Three"},
+    ]
+    assert "evil.test" not in str(sanitized)
+
+
 def local_profile() -> dict:
     return {
         "schemaVersion": 1,

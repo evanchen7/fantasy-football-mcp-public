@@ -34,9 +34,10 @@ This list separates the delivered live-draft baseline from prioritized follow-up
    - Replay completed drafts and measure top-pick hit rate, regret versus later availability, Brier score, and calibration error.
    - Keep all probability outputs labeled uncalibrated until thresholds are defined and met.
 
-2. **Stable Yahoo player identity**
-   - Capture and propagate only the extracted Yahoo `player_key` identifier where available; never persist or transmit the containing player URL.
-   - Use IDs before conservative normalized-name matching; add fixtures for suffixes, same-surname players, trades, and DST aliases.
+2. **Stable Yahoo player identity — delivered**
+   - The recorder captures and propagates only a validated numeric Yahoo `player_key` where Yahoo exposes one; the containing URL, query parameters, and arbitrary attributes are never persisted or transmitted.
+   - Equal keys take precedence over conservative normalized-name matching, unequal keys fail closed, and one-sided missing keys retain the position/team-aware fallback for old sessions and profiles. Sanitized fixtures cover suffixes, same-surname players, DST aliases, hostile attributes, external hosts, and malformed URLs.
+   - Remaining evidence work: measure key availability across live Yahoo layouts and completed drafts before removing the conservative fallback.
 
 3. **Auditable injury/news enrichment**
    - Delivered the optional provider contract with normalized status, source/item/snapshot timestamps, bounded persistent base snapshots and in-memory targeted identity lookups, a private fail-closed daily request budget, explicit limited-coverage warnings, and unknown-data semantics.

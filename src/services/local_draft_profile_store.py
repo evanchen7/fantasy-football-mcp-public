@@ -23,6 +23,8 @@ from datetime import date, datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from src.services.yahoo_player_identity import normalize_yahoo_player_key
+
 DEFAULT_PROFILE_STORE_PATH = Path.home() / ".fantasy-football-mcp" / "draft-profiles.json"
 DEFAULT_PROFILE_DEFAULTS_STORE_PATH = (
     Path.home() / ".fantasy-football-mcp" / "draft-profile-defaults.json"
@@ -73,6 +75,7 @@ _ECR_FIELD_ALIASES = {
     "position": {"POS", "POSITION"},
     "adp": {"ADP", "AVERAGEDRAFTPOSITION"},
     "bye": {"BYE", "BYEWEEK"},
+    "player_key": {"PLAYERKEY", "YAHOOPLAYERKEY"},
 }
 _SCORING_ALIASES = {
     "TEAMS": "teams",
@@ -320,6 +323,13 @@ def _sanitize_candidate(value: Any, index: int) -> dict[str, Any]:
         result["bye_week"] = _strict_integer(
             value["bye_week"], f"rankings[{index}].bye_week", 1, 22
         )
+    if "player_key" in value and value["player_key"] is not None:
+        player_key = normalize_yahoo_player_key(value["player_key"])
+        if player_key is None:
+            raise LocalDraftProfileValidationError(
+                f"rankings[{index}].player_key has an invalid format"
+            )
+        result["player_key"] = player_key
     return result
 
 
@@ -998,6 +1008,14 @@ def _convert_ecr_rows(ecr_rows: Sequence[Mapping[str, Any]]) -> list[dict[str, A
             candidate["bye_week"] = _coerce_integer(
                 bye_value, f"ECR row {row_number} bye week", 1, 22
             )
+        player_key_value = _row_lookup(row, _ECR_FIELD_ALIASES["player_key"])
+        if not _is_optional_blank(player_key_value):
+            player_key = normalize_yahoo_player_key(player_key_value)
+            if player_key is None:
+                raise LocalDraftProfileValidationError(
+                    f"ECR row {row_number} player_key has an invalid format"
+                )
+            candidate["player_key"] = player_key
         rankings.append(candidate)
     if not rankings:
         raise LocalDraftProfileValidationError(

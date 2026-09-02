@@ -17,6 +17,7 @@ from mcp.types import TextContent, Tool
 from src.api import get_access_token, refresh_yahoo_token, set_access_token, yahoo_api_call
 from src.parsers import parse_team_roster, parse_yahoo_free_agent_players
 from src.services import analyze_reddit_sentiment
+from src.services.yahoo_player_identity import normalize_yahoo_player_key
 
 # Import rate limiting and caching utilities
 from src.api.yahoo_utils import rate_limiter, response_cache
@@ -287,7 +288,11 @@ async def get_waiver_wire_players(
                                         if "name" in element:
                                             player_info["name"] = element["name"]["full"]
                                         if "player_key" in element:
-                                            player_info["player_key"] = element["player_key"]
+                                            player_key = normalize_yahoo_player_key(
+                                                element["player_key"]
+                                            )
+                                            if player_key is not None:
+                                                player_info["player_key"] = player_key
                                         if "editorial_team_abbr" in element:
                                             player_info["team"] = element["editorial_team_abbr"]
                                         if "display_position" in element:
@@ -388,6 +393,12 @@ async def get_draft_rankings(
                                     if isinstance(element, dict):
                                         if "name" in element:
                                             player_info["name"] = element["name"]["full"]
+                                        if "player_key" in element:
+                                            player_key = normalize_yahoo_player_key(
+                                                element["player_key"]
+                                            )
+                                            if player_key is not None:
+                                                player_info["player_key"] = player_key
                                         if "editorial_team_abbr" in element:
                                             player_info["team"] = element["editorial_team_abbr"]
                                         if "display_position" in element:

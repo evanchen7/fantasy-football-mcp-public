@@ -24,6 +24,7 @@ from src.services.local_draft_profile_store import (
     bind_default_local_draft_profile,
     load_local_draft_profile,
 )
+from src.services.yahoo_player_identity import normalize_yahoo_player_key
 
 ToolCaller = Callable[..., Awaitable[dict[str, Any]]]
 _YAHOO_RECOMMENDATION_LOCK = asyncio.Lock()
@@ -45,6 +46,30 @@ _FANTASYPROS_FIELDS = (
     "retrievedAt",
 )
 _POSITION_ALIASES = {"DEF": "DST", "D/ST": "DST"}
+
+
+def _sanitize_ranking_player_keys(
+    rankings: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Keep only one canonical Yahoo key and discard untrusted aliases."""
+
+    sanitized = []
+    for ranking in rankings:
+        candidate = dict(ranking)
+        supplied = [
+            candidate.pop(field)
+            for field in ("player_key", "playerKey")
+            if field in candidate
+        ]
+        valid = {
+            player_key
+            for value in supplied
+            if (player_key := normalize_yahoo_player_key(value)) is not None
+        }
+        if len(valid) == 1:
+            candidate["player_key"] = valid.pop()
+        sanitized.append(candidate)
+    return sanitized
 
 
 def _advisory_critic_enabled(critic: Any) -> bool:
@@ -471,6 +496,7 @@ async def get_live_draft_recommendation(
         league_source = "Yahoo league info"
         season = None
 
+    rankings = _sanitize_ranking_player_keys(rankings)
     rankings, enrichment, enrichment_warnings = await _enrich_with_fantasypros(
         rankings,
         season=season,

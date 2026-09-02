@@ -4,6 +4,7 @@ const { loadDomFixture } = require('./dom-fixture.js');
 
 const {
   collectDiagnosticSnapshots,
+  extractYahooPlayerKey,
   findCurrentPickNumber,
   findLiveDraftSnapshot,
   findPicksPanelSnapshots,
@@ -37,7 +38,11 @@ function fakeElement({ text, attributes = {}, selectors = {} }) {
 test('snapshots semantic pick fields from a candidate element', () => {
   const element = fakeElement({
     text: 'Pick 9 Player details',
-    attributes: { 'data-pick-number': '9', 'aria-label': 'Draft pick 9' },
+    attributes: {
+      'data-pick-number': '9',
+      'data-player-key': '461.p.33536',
+      'aria-label': 'Draft pick 9',
+    },
     selectors: {
       '[data-player-name]': node('Breece Hall'),
       '[data-position]': node('RB'),
@@ -57,8 +62,37 @@ test('snapshots semantic pick fields from a candidate element', () => {
       position: 'RB',
       nflTeam: 'NYJ',
       fantasyTeam: 'Gridiron Greats',
+      playerKey: '461.p.33536',
     },
   });
+});
+
+test('extracts only a canonical Yahoo player key and never returns its containing URL', () => {
+  const anchor = fakeElement({
+    text: 'Breece Hall',
+    attributes: {
+      href: 'https://football.fantasysports.yahoo.com/f1/10547893/playernote?player_key=461.p.33536&auth=secret',
+    },
+  });
+  const playerCell = fakeElement({ text: 'Breece Hall RB NYJ' });
+  playerCell.querySelectorAll = (selector) => (selector === 'a[href]' ? [anchor] : []);
+
+  assert.equal(extractYahooPlayerKey(playerCell), '461.p.33536');
+  assert.equal(JSON.stringify(extractYahooPlayerKey(playerCell)).includes('auth'), false);
+  assert.equal(extractYahooPlayerKey(fakeElement({
+    text: 'malicious',
+    attributes: { 'data-player-key': 'https://evil.test/?player_key=461.p.99999' },
+  })), null);
+
+  for (const href of [
+    'https://football.fantasysports.yahoo.com/f1/10547893/settings?player_key=461.p.33536',
+    'https://football.fantasysports.yahoo.com/player/%E0%A4%A?player_key=bad',
+  ]) {
+    const untrustedAnchor = fakeElement({ text: 'not a player link', attributes: { href } });
+    const wrapper = fakeElement({ text: 'still safe' });
+    wrapper.querySelectorAll = () => [untrustedAnchor];
+    assert.equal(extractYahooPlayerKey(wrapper), null);
+  }
 });
 
 test('does not snapshot oversized containers that are likely the whole draft page', () => {
@@ -283,6 +317,29 @@ test('extracts Yahoo Round by Round table rows with their round headers', () => 
   ]);
 });
 
+test('extracts stable keys from sanitized Yahoo ledger markup without retaining URLs or attributes', () => {
+  const snapshots = findRoundByRoundSnapshots(
+    loadDomFixture('yahoo-round-by-round-player-keys.html'),
+  );
+
+  assert.deepEqual(snapshots.map((snapshot) => snapshot.playerKey || null), [
+    '461.p.33536',
+    '461.p.31860',
+    '461.p.30123',
+    null,
+  ]);
+  assert.deepEqual(snapshots.map(parseRoundByRoundSnapshot).map((pick) => pick.playerKey || null), [
+    '461.p.33536',
+    '461.p.31860',
+    '461.p.30123',
+    null,
+  ]);
+  const serialized = JSON.stringify(snapshots);
+  for (const forbidden of ['https:', 'evil.test', 'auth=', 'token=', 'do-not-copy', 'data-private-manager']) {
+    assert.equal(serialized.includes(forbidden), false);
+  }
+});
+
 test('ignores unrelated three-column tables', () => {
   const table = {
     querySelector: () => ({ innerText: 'Rank Player Proj' }),
@@ -450,6 +507,7 @@ test('collects only structural diagnostic counters from adversarial DOM', () => 
       position: 0,
       nflTeam: 0,
       fantasyTeam: 0,
+      playerKey: 0,
     },
   });
   const serialized = JSON.stringify(diagnostics);

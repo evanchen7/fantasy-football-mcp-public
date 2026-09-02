@@ -7,6 +7,7 @@ import pytest
 
 from src.agents.live_draft_recommender import (
     LiveDraftRecommendationEngine,
+    _same_player,
     reconcile_live_draft,
 )
 
@@ -202,6 +203,82 @@ def test_recommender_filters_drafted_players_in_initialed_yahoo_ledger() -> None
     assert "Tyreek Hill" not in names
     assert "Breece Hall" not in names
     assert set(names).issubset({item["name"] for item in rankings()[6:]})
+
+
+def test_yahoo_player_keys_take_precedence_over_ambiguous_names_and_suffixes() -> None:
+    keyed_pick = {
+        "player": "B. Robinson Jr.",
+        "position": "RB",
+        "nflTeam": "WAS",
+        "playerKey": "461.p.33536",
+    }
+
+    assert _same_player(
+        keyed_pick,
+        {
+            "name": "Brian Robinson Jr.",
+            "position": "RB",
+            "team": "WAS",
+            "player_key": "461.p.33536",
+        },
+    )
+    assert not _same_player(
+        keyed_pick,
+        {
+            "name": "Brian Robinson Sr.",
+            "position": "RB",
+            "team": "WAS",
+            "player_key": "461.p.99999",
+        },
+    )
+    assert _same_player(
+        keyed_pick,
+        {"name": "Brian Robinson Jr.", "position": "RB", "team": "WAS"},
+    )
+
+
+def test_yahoo_player_keys_disambiguate_dst_before_team_fallback() -> None:
+    pick = {
+        "player": "San Francisco 49ers",
+        "position": "DEF",
+        "nflTeam": "SF",
+        "playerKey": "461.p.100042",
+    }
+    assert _same_player(
+        pick,
+        {
+            "name": "49ers D/ST",
+            "position": "DST",
+            "team": "SF",
+            "player_key": "461.p.100042",
+        },
+    )
+    assert not _same_player(
+        pick,
+        {
+            "name": "49ers D/ST",
+            "position": "DST",
+            "team": "SF",
+            "player_key": "461.p.100099",
+        },
+    )
+
+
+def test_recommendations_propagate_only_a_valid_yahoo_player_key() -> None:
+    context = live_context()
+    candidates = rankings()
+    candidates[-1]["player_key"] = "461.p.100042"
+
+    result = LiveDraftRecommendationEngine(simulations=0).recommend(
+        context, candidates, {"teams": 4}, count=10
+    )
+    keyed = next(
+        item
+        for item in result["recommendations"]
+        if item["player"]["name"] == candidates[-1]["name"]
+    )
+
+    assert keyed["player"]["playerKey"] == "461.p.100042"
 
 
 def test_recommender_normalizes_jaguars_team_alias_for_initialed_picks() -> None:

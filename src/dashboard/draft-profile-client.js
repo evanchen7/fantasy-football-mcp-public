@@ -79,6 +79,15 @@
     return team;
   }
 
+  function optionalPlayerKey(value, rowNumber) {
+    if (value === null || value === undefined || value === '') return null;
+    const playerKey = typeof value === 'string' ? value.trim() : '';
+    if (!/^[1-9]\d{0,9}\.p\.[1-9]\d{0,9}$/.test(playerKey)) {
+      throw new Error(`Yahoo player key in row ${rowNumber} is invalid.`);
+    }
+    return playerKey;
+  }
+
   function optionalIsoDate(value, label = 'Source date') {
     if (value === null || value === undefined || value === '') return null;
     if (typeof value !== 'string' || value.length > 40) throw new Error(`${label} is invalid.`);
@@ -99,6 +108,8 @@
     };
     const team = optionalTeam(value.team);
     if (team) result.team = team;
+    const playerKey = optionalPlayerKey(value.player_key ?? value.playerKey, rowNumber);
+    if (playerKey) result.player_key = playerKey;
     const adp = finiteNumber(value.average_draft_position, `ADP in row ${rowNumber}`);
     if (adp !== null) {
       if (adp <= 0 || adp > 10_000) throw new Error(`ADP in row ${rowNumber} is out of range.`);
@@ -202,6 +213,11 @@
       team: headerIndex(headers, new Set(['TEAM', 'NFL TEAM']), 'Team'),
       adp: headerIndex(headers, new Set(['ADP', 'AVG DRAFT POSITION', 'AVERAGE DRAFT POSITION']), 'ADP'),
       bye: headerIndex(headers, new Set(['BYE', 'BYE WEEK']), 'Bye Week'),
+      playerKey: headerIndex(
+        headers,
+        new Set(['YAHOO PLAYER KEY', 'PLAYER KEY', 'PLAYERKEY']),
+        'Yahoo Player Key',
+      ),
     };
     const draftSheetsHeaders = ['RK', 'PLAYER NAME', 'TEAM', 'POS', 'BYE WEEK']
       .every((header) => headers.includes(header));
@@ -212,6 +228,7 @@
       team: indexes.team >= 0 ? columns[indexes.team] : undefined,
       average_draft_position: indexes.adp >= 0 ? columns[indexes.adp] : undefined,
       bye_week: indexes.bye >= 0 ? columns[indexes.bye] : undefined,
+      player_key: indexes.playerKey >= 0 ? columns[indexes.playerKey] : undefined,
       _rowNumber: rowIndex + 2,
     }));
     const validated = validateAndSortRankings(values, {

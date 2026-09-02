@@ -6,7 +6,7 @@ The assistant is recommendation-only. It does not set a lineup, add or drop a pl
 
 ## Two ways to use it
 
-- **Live draft assistant:** the extension records Yahoo's numbered draft ledger, the local server combines it with imported rankings and roster settings, and the sidebar/dashboard recommends the next pick. Yahoo API approval is not required when the current draft has a local profile.
+- **Live draft assistant:** the extension records Yahoo's numbered draft ledger and an extracted Yahoo player key when the page exposes one, the local server combines it with imported rankings and roster settings, and the sidebar/dashboard recommends the next pick. Yahoo API approval is not required when the current draft has a local profile.
 - **Yahoo league tools:** an MCP client can inspect leagues, settings, standings, rosters, matchups, players, waivers, and completed drafts. These tools require a Yahoo developer app that Yahoo has approved for Fantasy Sports API access.
 
 This project is intended to run for one user on their own computer. Keep the server bound to `127.0.0.1`; its MCP transport has no local authentication boundary.
@@ -125,14 +125,14 @@ The recorder continues watching new picks when other Yahoo draft panels are visi
 The dashboard's **Local draft profile** section accepts:
 
 - A supported DraftSheets 2026 `.xlsx` workbook, up to 2 MB
-- An ECR `.csv` with required rank/ECR, player-name, and position columns; team, ADP, and bye are optional
+- An ECR `.csv` with required rank/ECR, player-name, and position columns; team, ADP, bye, and Yahoo player key are optional
 - A strict `schemaVersion: 1` `.json` profile
 
 Before importing, check the team count and roster slots shown in the form. The server keeps at most 500 sanitized ranking rows and binds them to the exact recorder identity. It does not store the raw workbook, filename, formulas, notes, URLs, or arbitrary cells.
 
 Google Drive is optional storage only; this app does not read Drive or Google Sheets at runtime. Download the sheet to your computer as `.xlsx` or export its ECR tab as CSV, then choose that local file in the dashboard.
 
-A matching local profile provides rankings and league settings with zero Yahoo API calls. Drafted players still come from the extension's live ledger. Yahoo's initialed player names are matched conservatively by name, position, and canonical NFL team; known equivalent provider codes such as Jacksonville's `JAX` and `JAC` are normalized before availability is decided.
+A matching local profile provides rankings and league settings with zero Yahoo API calls. Drafted players still come from the extension's live ledger. When both a ledger pick and ranking carry the same validated numeric Yahoo `player_key`, that key is preferred; unequal keys never fall back to a same-name match. If either side lacks a key, Yahoo's initialed player names are matched conservatively by name, position, and canonical NFL team. Known equivalent provider codes such as Jacksonville's `JAX` and `JAC` are normalized before availability is decided.
 
 ### 7. Get recommendations
 
@@ -315,7 +315,7 @@ Private runtime data is stored under `~/.fantasy-football-mcp/`. The default dir
 - `fantasypros-snapshots.sqlite3` — normalized FantasyPros base snapshots only
 - `fantasypros-request-budget.json` — only UTC date and request count
 
-The browser profile separately stores the extension's sanitized per-league recorder state. The recorder does not store Yahoo cookies, OAuth credentials, page URLs, query parameters, chat, or arbitrary page fields. Loopback routes validate origins, cap payloads, allowlist fields, and return recommendation responses with `Cache-Control: no-store`.
+The browser profile separately stores the extension's sanitized per-league recorder state. It may include an extracted numeric Yahoo player key such as `461.p.33536`; the containing link is used only during scanning and is never retained. The recorder does not store Yahoo cookies, OAuth credentials, page URLs, query parameters, chat, or arbitrary page fields. Loopback routes validate origins, cap payloads, allowlist fields, and return recommendation responses with `Cache-Control: no-store`.
 
 FantasyPros receives only its API requests. No draft ledger or Yahoo credential is sent to FantasyPros. When the Databricks advisory critic is explicitly enabled, Databricks receives only the identity-free allowlist described above; this app keeps its advisory cache in memory only. Google Drive receives nothing from this app because it is not a runtime integration.
 

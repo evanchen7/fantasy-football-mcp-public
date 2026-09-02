@@ -48,6 +48,7 @@ def local_profile(league_id: str = "498589", team_id: str = "6") -> dict:
                 "rank": 1,
                 "average_draft_position": 1.5,
                 "bye_week": 6,
+                "player_key": "461.p.33536",
                 "notes": "must not be retained",
             },
             {
@@ -109,6 +110,7 @@ def test_sanitizes_canonical_profile_and_strips_unknown_fields() -> None:
                 "rank": 1,
                 "average_draft_position": 1.5,
                 "bye_week": 6,
+                "player_key": "461.p.33536",
             },
             {
                 "name": "Seattle Seahawks",
@@ -153,6 +155,12 @@ def test_sanitizes_canonical_profile_and_strips_unknown_fields() -> None:
         (lambda value: value["rankings"][0].update(position="FLEX"), "position"),
         (lambda value: value["rankings"][0].update(rank=True), "rank"),
         (lambda value: value["rankings"][0].update(team="https://bad"), "team"),
+        (
+            lambda value: value["rankings"][0].update(
+                player_key="461.p.33536?auth=secret"
+            ),
+            "player_key",
+        ),
         (
             lambda value: value["provenance"].update(format="arbitrary-sheet"),
             "provenance.format",

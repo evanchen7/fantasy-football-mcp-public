@@ -21,6 +21,8 @@ from datetime import datetime, timezone
 from functools import lru_cache
 from typing import Any
 
+from src.services.yahoo_player_identity import normalize_yahoo_player_key
+
 _POSITION_ALIASES = {
     "DEF": "DST",
     "D/ST": "DST",
@@ -160,6 +162,15 @@ def _inverse_logistic(exponent: float) -> float:
 
 def _same_player(pick: Mapping[str, Any], player: Mapping[str, Any]) -> bool:
     """Resolve Yahoo's initialed ledger names without broad last-name-only matching."""
+
+    pick_player_key = normalize_yahoo_player_key(
+        pick.get("playerKey") or pick.get("player_key")
+    )
+    ranking_player_key = normalize_yahoo_player_key(
+        player.get("player_key") or player.get("playerKey")
+    )
+    if pick_player_key and ranking_player_key:
+        return pick_player_key == ranking_player_key
 
     pick_position = _position(pick.get("position"))
     player_position = _position(player.get("position"))
@@ -916,6 +927,16 @@ class LiveDraftRecommendationEngine:
                         "name": candidate.name,
                         "position": candidate.position,
                         "team": candidate.team,
+                        **(
+                            {"playerKey": yahoo_player_key}
+                            if (
+                                yahoo_player_key := normalize_yahoo_player_key(
+                                    candidate.raw.get("player_key")
+                                    or candidate.raw.get("playerKey")
+                                )
+                            )
+                            else {}
+                        ),
                         "rank": candidate.rank,
                         "adp": candidate.adp,
                         "byeWeek": candidate.raw.get("bye") or candidate.raw.get("bye_week"),
@@ -1045,7 +1066,7 @@ class LiveDraftRecommendationEngine:
         value = item.get("specialistDetails")
         value = value.get("value") if isinstance(value, Mapping) else {}
         raw_score = item.get("overallScore") if score is None else score
-        return {
+        result = {
             "name": str(player.get("name") or "Unknown player")[:120],
             "position": _position(player.get("position"))[:16],
             "team": str(player.get("team") or "")[:16],
@@ -1054,6 +1075,12 @@ class LiveDraftRecommendationEngine:
             "adp": round(_number(player.get("adp"), 0.0), 2),
             "tier": str(value.get("tier") or "unknown")[:24],
         }
+        player_key = normalize_yahoo_player_key(
+            player.get("playerKey") or player.get("player_key")
+        )
+        if player_key:
+            result["playerKey"] = player_key
+        return result
 
     @staticmethod
     def _strategy_comparison(

@@ -41,9 +41,9 @@ test('parses a DraftSheets ECR CSV locally and allowlists ranking fields', () =>
 
 test('normalizes generic CSV aliases and optional ADP without inventing missing values', () => {
   const parsed = parseDraftProfileFile([
-    'Rank,Name,Position,NFL Team,ADP,Bye',
-    '1,Player One,QB,buf,3.25,7',
-    '2,Player Two,WR,,,',
+    'Rank,Name,Position,NFL Team,ADP,Bye,Yahoo Player Key',
+    '1,Player One,QB,buf,3.25,7,461.p.33536',
+    '2,Player Two,WR,,,,',
   ].join('\n'), 'board.CSV');
 
   assert.equal(parsed.format, 'csv');
@@ -55,6 +55,7 @@ test('normalizes generic CSV aliases and optional ADP without inventing missing 
       rank: 1,
       average_draft_position: 3.25,
       bye_week: 7,
+      player_key: '461.p.33536',
     },
     { name: 'Player Two', position: 'WR', rank: 2 },
   ]);
@@ -113,6 +114,7 @@ test('parses strict JSON while omitting unknown private fields', () => {
       bye_week: 10,
       notes: 'private manager note',
       injury_status: 'Healthy',
+      player_key: '449.p.100042',
     }],
   }), 'profile.json');
 
@@ -126,6 +128,7 @@ test('parses strict JSON while omitting unknown private fields', () => {
       rank: 1,
       average_draft_position: 4.5,
       bye_week: 10,
+      player_key: '449.p.100042',
     }],
     truncatedCount: 0,
   });
@@ -142,6 +145,29 @@ test('does not accept a URL or spreadsheet formula disguised as a player name', 
         rankings: [{ rank: 1, name, position: 'QB', team: 'BUF' }],
       }), 'profile.json'),
       /Player name.*invalid/,
+    );
+  }
+});
+
+test('rejects a URL or query-bearing value disguised as a Yahoo player key', () => {
+  for (const playerKey of [
+    'https://example.test/?player_key=461.p.33536',
+    '461.p.33536?auth=secret',
+    'nfl.p.33536',
+    'p.33536',
+  ]) {
+    assert.throws(
+      () => parseDraftProfileFile(JSON.stringify({
+        schemaVersion: 1,
+        rankings: [{
+          rank: 1,
+          name: 'Player One',
+          position: 'QB',
+          team: 'BUF',
+          player_key: playerKey,
+        }],
+      }), 'profile.json'),
+      /Yahoo player key.*invalid/i,
     );
   }
 });

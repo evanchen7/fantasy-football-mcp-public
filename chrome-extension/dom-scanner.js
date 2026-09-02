@@ -69,6 +69,49 @@
     return String(value ?? '').replace(/\u00a0/g, ' ').replace(/[ \t]+/g, ' ').trim();
   }
 
+  function normalizePlayerKey(value) {
+    if (typeof value !== 'string') return null;
+    const playerKey = value.trim();
+    return /^[1-9]\d{0,9}\.p\.[1-9]\d{0,9}$/.test(playerKey) ? playerKey : null;
+  }
+
+  function extractYahooPlayerKey(element) {
+    if (!element) return null;
+    for (const attribute of ['data-player-key', 'data-yahoo-player-key']) {
+      const direct = normalizePlayerKey(element.getAttribute?.(attribute));
+      if (direct) return direct;
+      const nested = element.querySelector?.(`[${attribute}]`);
+      const nestedKey = normalizePlayerKey(nested?.getAttribute?.(attribute));
+      if (nestedKey) return nestedKey;
+    }
+
+    const anchors = [...(element.querySelectorAll?.('a[href]') || [])].slice(0, 20);
+    for (const anchor of anchors) {
+      const href = anchor.getAttribute?.('href');
+      if (typeof href !== 'string' || href.length > 500) continue;
+      let url;
+      try {
+        url = new URL(href, 'https://football.fantasysports.yahoo.com/');
+      } catch (_error) {
+        continue;
+      }
+      if (url.hostname !== 'football.fantasysports.yahoo.com') continue;
+      if (!/(?:^|\/)(?:player|players|playernote|playercard)(?:\/|$)/i.test(url.pathname)) {
+        continue;
+      }
+      for (const parameter of ['player_key', 'playerKey']) {
+        const queryKey = normalizePlayerKey(url.searchParams.get(parameter));
+        if (queryKey) return queryKey;
+      }
+      const pathKey = url.pathname
+        .split('/')
+        .map((part) => normalizePlayerKey(part))
+        .find(Boolean);
+      if (pathKey) return pathKey;
+    }
+    return null;
+  }
+
   function readField(element, selectors) {
     const node = element.querySelector(selectors.join(','));
     return clean(node?.textContent || node?.getAttribute?.('aria-label')) || undefined;
@@ -89,6 +132,8 @@
       const value = readField(element, selectors);
       if (value) labels[field] = value;
     }
+    const playerKey = extractYahooPlayerKey(element);
+    if (playerKey) labels.playerKey = playerKey;
 
     return { text, attributes, labels };
   }
@@ -217,12 +262,15 @@
     const playerText = safePanelField(playerLines[0], 80, PANEL_PLAYER_PATTERN);
     const fantasyTeamText = safePanelField(teamLines[0], 80, PANEL_TEAM_PATTERN);
     if (!playerText || !fantasyTeamText || /\bjoined\b/i.test(fantasyTeamText)) return null;
-    return {
+    const snapshot = {
       pickNumberText: lines[numberIndex],
       playerText,
       detailsText: lines[detailsIndex],
       fantasyTeamText,
     };
+    const playerKey = extractYahooPlayerKey(element);
+    if (playerKey) snapshot.playerKey = playerKey;
+    return snapshot;
   }
 
   function findPicksPanelSnapshots(root) {
@@ -298,12 +346,15 @@
       }
       const pickText = clean(cells[0].innerText || cells[0].textContent);
       if (!includeMalformed && !/^\d+$/.test(pickText)) continue;
-      snapshots.push({
+      const snapshot = {
         roundText,
         pickText,
         playerText: clean(cells[1].innerText || cells[1].textContent),
         fantasyTeamText: clean(cells[2].innerText || cells[2].textContent),
-      });
+      };
+      const playerKey = extractYahooPlayerKey(cells[1]);
+      if (playerKey) snapshot.playerKey = playerKey;
+      snapshots.push(snapshot);
     }
     return snapshots;
   }
@@ -395,6 +446,7 @@
     const elements = root?.querySelectorAll?.('body *') || [];
     let statusText;
     let lastPickText;
+    let lastPickElement;
 
     for (const element of elements) {
       const text = clean(element?.innerText || element?.textContent);
@@ -404,11 +456,18 @@
         if (!statusText || text.length < statusText.length) statusText = text;
       }
       if (/^Last\s*:.*\)\s*\S/i.test(flatText)) {
-        if (!lastPickText || text.length < lastPickText.length) lastPickText = text;
+        if (!lastPickText || text.length < lastPickText.length) {
+          lastPickText = text;
+          lastPickElement = element;
+        }
       }
     }
 
-    return statusText && lastPickText ? { statusText, lastPickText } : null;
+    if (!statusText || !lastPickText) return null;
+    const snapshot = { statusText, lastPickText };
+    const playerKey = extractYahooPlayerKey(lastPickElement);
+    if (playerKey) snapshot.playerKey = playerKey;
+    return snapshot;
   }
 
   function collectDiagnosticSnapshots(root) {
@@ -421,6 +480,7 @@
       position: 0,
       nflTeam: 0,
       fantasyTeam: 0,
+      playerKey: 0,
     };
     let snapshottedCandidateCount = 0;
     for (const candidate of candidates) {
@@ -435,6 +495,7 @@
       for (const field of ['player', 'position', 'nflTeam', 'fantasyTeam']) {
         if (labels[field]) fieldPresence[field] += 1;
       }
+      if (labels.playerKey) fieldPresence.playerKey += 1;
     }
     const ledgerScan = scanAuthoritativeRoundByRoundTables(root);
     const picksPanelSnapshots = findPicksPanelSnapshots(root);
@@ -452,6 +513,7 @@
   const api = {
     CANDIDATE_SELECTOR,
     collectDiagnosticSnapshots,
+    extractYahooPlayerKey,
     findCurrentPickNumber,
     findLiveDraftSnapshot,
     findPicksPanelSnapshots,

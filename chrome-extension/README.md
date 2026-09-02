@@ -63,12 +63,13 @@ When Yahoo exposes each field, a pick contains:
 - Overall pick number
 - Round and pick within the round
 - Player name
+- Extracted numeric Yahoo player key, when Yahoo exposes one
 - NFL position and team
 - Fantasy team/manager label
 - Whether Yahoo labeled it **Your Team**
 - Local recording timestamp
 
-The extension records only sanitized draft context. It does not record Yahoo credentials, cookies, chat, arbitrary page text, or the draft's page location.
+The extension records only sanitized draft context. A Yahoo player link may be inspected ephemerally only on the expected Yahoo host and a recognized player path; only its validated `game_key.p.player_id` value is retained. The link, query parameters, and other attributes are discarded. The extension does not record Yahoo credentials, cookies, chat, arbitrary page text, or the draft's page location.
 
 ## Popup, sidebar, and dashboard
 
@@ -240,6 +241,7 @@ Yahoo may have changed its layout. Select **Save diagnostics**. The report conta
 - Loopback endpoints allowlist fields, validate the exact session, cap payloads, restrict origins, and return recommendation responses with `Cache-Control: no-store`.
 - Server-side draft/profile/cache files use user-only permissions.
 - The extension stores no Yahoo credentials, cookies, OAuth parameters, full page locations, or arbitrary browser fields.
+- Matching prefers equal validated Yahoo player keys. Unequal keys fail closed; a missing key uses the existing conservative name, position, and NFL-team fallback.
 - Optional Databricks review receives no player identity, league/session/team identity, ledger, headline, URL, or credential; it cannot mutate recommendation order or scores.
 - Recommendations never draft a player or inject controls into Yahoo.
 
