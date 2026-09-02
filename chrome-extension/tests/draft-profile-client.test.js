@@ -61,6 +61,58 @@ test('normalizes generic CSV aliases and optional ADP without inventing missing 
   ]);
 });
 
+test('parses only complete sourced breakout evidence from generic CSV', () => {
+  const parsed = parseDraftProfileFile([
+    'Rank,Name,Position,NFL Team,Projection Source,Projection As Of,Projected Points,Projected Opportunities,Opportunity Kind,Experience Years,Private Notes',
+    '1,Young Runner,RB,buf,Example Projections,2026-08-20,245.5,270,touches,2,manager secret',
+    '2,Plain Receiver,WR,sea,,,,,,,private chat',
+  ].join('\n'), 'board.csv');
+
+  assert.deepEqual(parsed.rankings, [
+    {
+      name: 'Young Runner',
+      position: 'RB',
+      team: 'BUF',
+      rank: 1,
+      breakout_evidence: {
+        source: 'Example Projections',
+        as_of: '2026-08-20',
+        projected_points: 245.5,
+        projected_opportunities: 270,
+        opportunity_kind: 'touches',
+        experience_years: 2,
+      },
+    },
+    { name: 'Plain Receiver', position: 'WR', team: 'SEA', rank: 2 },
+  ]);
+  assert.equal(JSON.stringify(parsed).includes('secret'), false);
+  assert.equal(JSON.stringify(parsed).includes('chat'), false);
+});
+
+test('rejects partial or unsafe breakout evidence instead of guessing', () => {
+  assert.throws(
+    () => parseDraftProfileFile([
+      'Rank,Name,Position,Projection Source,Projected Points',
+      '1,Young Runner,RB,Example Projections,245.5',
+    ].join('\n'), 'board.csv'),
+    /Breakout evidence.*complete/i,
+  );
+  assert.throws(
+    () => parseDraftProfileFile([
+      'Rank,Name,Position,Projection Source,Projection As Of,Projected Points,Projected Opportunities,Opportunity Kind,Experience Years',
+      '1,Young Runner,RB,https://example.test/?token=secret,2026-08-20,245.5,270,touches,2',
+    ].join('\n'), 'board.csv'),
+    /Projection source.*invalid/i,
+  );
+  assert.throws(
+    () => parseDraftProfileFile([
+      'Rank,Name,Position,Projection Source,Projection As Of,Projected Points,Projected Opportunities,Opportunity Kind,Experience Years',
+      '1,Young Runner,RB,/Users/private/projections.csv,2026-08-20,245.5,270,touches,2',
+    ].join('\n'), 'board.csv'),
+    /Projection source.*invalid/i,
+  );
+});
+
 test('rejects malformed, ambiguous, or oversized generic CSV instead of guessing', () => {
   assert.throws(
     () => parseDraftProfileFile('Rank,Name\n1,Player One', 'board.csv'),
@@ -135,6 +187,56 @@ test('parses strict JSON while omitting unknown private fields', () => {
   assert.equal(JSON.stringify(parsed).includes('secret'), false);
   assert.equal(JSON.stringify(parsed).includes('private'), false);
   assert.equal(JSON.stringify(parsed).includes('Healthy'), false);
+});
+
+test('preserves a strict complete breakout evidence object from JSON', () => {
+  const parsed = parseDraftProfileFile(JSON.stringify({
+    schemaVersion: 1,
+    rankings: [{
+      rank: 1,
+      name: 'Young Receiver',
+      position: 'WR',
+      breakout_evidence: {
+        source: 'Example Projections',
+        as_of: '2026-08-20',
+        projected_points: 210,
+        projected_opportunities: 125,
+        opportunity_kind: 'targets',
+        experience_years: 1,
+      },
+    }],
+  }), 'profile.json');
+
+  assert.deepEqual(parsed.rankings[0].breakout_evidence, {
+    source: 'Example Projections',
+    as_of: '2026-08-20',
+    projected_points: 210,
+    projected_opportunities: 125,
+    opportunity_kind: 'targets',
+    experience_years: 1,
+  });
+});
+
+test('keeps projected receptions distinct from projected targets for WR and TE evidence', () => {
+  const parsed = parseDraftProfileFile(JSON.stringify({
+    schemaVersion: 1,
+    rankings: [{
+      rank: 1,
+      name: 'Young Receiver',
+      position: 'WR',
+      breakout_evidence: {
+        source: 'FantasyPros Projections',
+        as_of: '2026-08-20',
+        projected_points: 210,
+        projected_opportunities: 72,
+        opportunity_kind: 'receptions',
+        experience_years: 1,
+      },
+    }],
+  }), 'profile.json');
+
+  assert.equal(parsed.rankings[0].breakout_evidence.opportunity_kind, 'receptions');
+  assert.equal(parsed.rankings[0].breakout_evidence.projected_opportunities, 72);
 });
 
 test('does not accept a URL or spreadsheet formula disguised as a player name', () => {

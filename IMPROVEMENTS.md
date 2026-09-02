@@ -16,6 +16,8 @@ This list separates the delivered live-draft baseline from prioritized follow-up
 - Persistent Firefox Draft Assistant sidebar with explicit league selection, shared fail-closed recommendation components, and no Yahoo-page injection or draft actions.
 - Clock-aware at-a-glance decision brief in the sidebar and dashboard with explicit on-clock/next/picks-away states, a primary pick, two immediate fallbacks, and a guarded plain-R refresh shortcut. It uses reliable pick distance and does not invent a countdown timer.
 - Transparent uncalibrated Value, Sleeper Watch, Fade, and take-now/can-wait signals shared by the sidebar and dashboard. They require real ADP plus dated same-season provenance, use league-round thresholds, fail closed for defective ledgers or unresolved drafted identities, preserve raw metrics, surface only fresh attributed risk cautions, and explain bounded exclusions without claiming breakout performance.
+- Bounded deterministic next-two-selections planning that preserves the primary recommendation, proposes position-aware fallback/next-turn combinations, labels actual-ADP availability as uncalibrated, and omits or degrades future projections when ledger, order, freshness, identity, team-count, or ADP evidence is uncertain.
+- Evidence-gated Breakout Watch labels from strict local CSV/JSON projection fields. Labels require fresh, explicitly attributed projected points plus position-appropriate touches, targets, or receptions; use a stable full-ranking same-source cohort; remain uncalibrated; and are never inferred from ADP or headline sentiment. Missing evidence does not degrade ordinary recommendations.
 - Exact-session-scoped personal queues in the dashboard and Firefox sidebar, with bounded reorder/removal controls, conservative drafted-player reconciliation, and no profile-to-mock copying.
 - Full live draft cockpit with position/tier filtering, three-strategy sensitivity, recent position-run alerts, roster-slot gap warnings, position-aware fallback tiers, readiness checks, bounded quick comparison, and value/reach recap.
 - Explicit opt-in, authoritative-ledger-only, deduplicated browser alerts when the user is next or on the clock; notifications remain advisory and never initiate a draft action.
@@ -65,8 +67,8 @@ This list separates the delivered live-draft baseline from prioritized follow-up
    - Next, make critic checks actionable rather than merely descriptive.
 
 5. **Contingency depth**
-   - Delivered bounded position-aware fallback tiers from the current trustworthy ranking pool.
-   - Next, evaluate fallback usefulness in draft replays and model opponent-specific depletion before the user's next turn.
+   - Delivered bounded position-aware fallback tiers from the current trustworthy ranking pool and a deterministic primary-now plus next-turn combination planner.
+   - Next, evaluate fallback and two-pick usefulness in draft replays, calibrate any availability estimates, and model opponent-specific depletion before the user's next turn.
 
 ## P2 — operations and usability
 

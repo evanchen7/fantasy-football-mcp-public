@@ -122,6 +122,125 @@ test('makes turn urgency explicit without inventing a draft clock', () => {
   }
 });
 
+test('shows a bounded deterministic two-pick plan with uncalibrated availability', () => {
+  const model = createRecommendationViewModel(response({
+    nextTwoPicksPlan: {
+      status: 'ready',
+      method: 'bounded deterministic candidate-pair scoring',
+      probabilitiesCalibrated: false,
+      primaryNow: { name: 'Player 1', position: 'WR', team: 'SEA', score: 89 },
+      fallbacksNow: [{ name: 'Player 2', position: 'RB', team: 'SEA', score: 88 }],
+      nextUserPicks: [31, 42],
+      combinations: [{
+        now: { name: 'Player 1', position: 'WR', team: 'SEA', score: 89 },
+        nextTurn: { name: 'Player 4', position: 'RB', team: 'SEA', score: 86 },
+        positions: ['WR', 'RB'],
+        combinedScore: 82,
+        nextTurnAvailabilityProbability: 0.63,
+        probabilityCalibrated: false,
+        reasons: ['Spreads positions.', 'Uses actual ADP only.'],
+      }],
+      uncertainties: [],
+      summary: 'Use the primary now and re-run after every pick.',
+    },
+  }), { leagueId: '10462193' });
+
+  assert.deepEqual(model.nextTwoPicksPlan, {
+    status: 'ready',
+    statusLabel: 'Two-pick plan ready',
+    summary: 'Use the primary now and re-run after every pick.',
+    pickLabel: 'Your selections: 31, then 42',
+    primaryLabel: 'Primary now: Player 1 · WR · SEA',
+    fallbackLabels: ['Fallback now: Player 2 · RB · SEA'],
+    combinations: [{
+      label: 'Player 1 (WR) → Player 4 (RB)',
+      availabilityLabel: 'Estimated next-turn availability 63% · uncalibrated heuristic',
+      reasons: ['Spreads positions.', 'Uses actual ADP only.'],
+    }],
+    uncertainties: [],
+  });
+});
+
+test('omits an inconsistent two-pick plan instead of overriding deterministic order', () => {
+  const model = createRecommendationViewModel(response({
+    nextTwoPicksPlan: {
+      status: 'ready',
+      probabilitiesCalibrated: false,
+      primaryNow: { name: 'Contradictory Player', position: 'QB', team: 'BUF', score: 99 },
+      fallbacksNow: [],
+      nextUserPicks: [31, 42],
+      combinations: [],
+      uncertainties: [],
+      summary: 'Override the deterministic primary.',
+    },
+  }), { leagueId: '10462193' });
+
+  assert.equal(model.nextTwoPicksPlan, null);
+});
+
+test('shows Breakout Watch only for complete explicit uncalibrated evidence', () => {
+  const breakout = {
+    label: 'Breakout Watch',
+    method: 'fresh same-source position cohort',
+    source: 'Example Projections',
+    asOf: '2026-08-20',
+    projectedPoints: 210,
+    projectedOpportunities: 125,
+    opportunityKind: 'targets',
+    experienceYears: 2,
+    pointsPercentile: 0.8,
+    opportunityPercentile: 0.8,
+    calibrated: false,
+  };
+  const model = createRecommendationViewModel(response({
+    capabilities: { injuryStatus: false, externalNews: false, breakoutWatch: true },
+    recommendations: [candidate(1, { breakoutWatch: breakout })],
+  }), { leagueId: '10462193' });
+
+  assert.equal(model.recommendations[0].breakoutLabel, 'Breakout Watch · uncalibrated');
+  assert.equal(
+    model.recommendations[0].breakoutDetail,
+    'Example Projections · as of 2026-08-20 · 210 projected points · 125 targets · year 2',
+  );
+  assert.equal(model.recommendations[0].breakoutMethod, 'fresh same-source position cohort');
+
+  const invalid = createRecommendationViewModel(response({
+    capabilities: { injuryStatus: false, externalNews: false, breakoutWatch: true },
+    recommendations: [candidate(1, {
+      breakoutWatch: { ...breakout, calibrated: true },
+      risk: { recentNews: [{ headline: 'Breakout season incoming' }] },
+    })],
+  }), { leagueId: '10462193' });
+  assert.equal(invalid.recommendations[0].breakoutLabel, '');
+
+  const wrongOpportunityKind = createRecommendationViewModel(response({
+    capabilities: { injuryStatus: false, externalNews: false, breakoutWatch: true },
+    recommendations: [candidate(1, {
+      player: { ...candidate(1).player, position: 'WR' },
+      breakoutWatch: { ...breakout, opportunityKind: 'touches' },
+    })],
+  }), { leagueId: '10462193' });
+  assert.equal(wrongOpportunityKind.recommendations[0].breakoutLabel, '');
+});
+
+test('explains unavailable breakout evidence without degrading ordinary recommendations', () => {
+  const model = createRecommendationViewModel(response({
+    cockpit: {
+      breakoutWatch: {
+        status: 'unavailable',
+        calibrated: false,
+        message: 'Breakout evidence is unavailable: import fresh sourced projections.',
+      },
+    },
+  }), { leagueId: '10462193' });
+
+  assert.equal(
+    model.breakoutEvidenceNotice,
+    'Breakout evidence is unavailable: import fresh sourced projections.',
+  );
+  assert.equal(model.mode, 'degraded');
+});
+
 test('groups repeated FantasyPros public coverage warnings into one readable disclosure', () => {
   const model = createRecommendationViewModel(response({
     capabilities: { injuryStatus: false, externalNews: true },

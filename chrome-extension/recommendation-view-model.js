@@ -24,6 +24,13 @@
     ['can-wait', 'Can wait'],
     ['timing-unknown', 'Timing unknown'],
   ]);
+  const PLAYER_POSITIONS = new Set(['QB', 'RB', 'WR', 'TE', 'K', 'DST']);
+  const BREAKOUT_OPPORTUNITY_KINDS = new Set(['touches', 'targets', 'receptions']);
+  const BREAKOUT_KINDS_BY_POSITION = {
+    RB: new Set(['touches']),
+    WR: new Set(['targets', 'receptions']),
+    TE: new Set(['targets', 'receptions']),
+  };
 
   function safeText(value, maximum = 300, fallback = '') {
     if (typeof value !== 'string' && typeof value !== 'number') return fallback;
@@ -62,6 +69,164 @@
       if (result.length >= maximum) break;
     }
     return result;
+  }
+
+  function validIsoDate(value) {
+    const text = safeText(value, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) return '';
+    const parsed = new Date(`${text}T00:00:00Z`);
+    return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === text
+      ? text
+      : '';
+  }
+
+  function displayNumber(value) {
+    return Number.isInteger(value) ? String(value) : String(Math.round(value * 100) / 100);
+  }
+
+  function breakoutWatch(rawBreakout, available, playerPosition) {
+    if (
+      available !== true ||
+      !rawBreakout ||
+      typeof rawBreakout !== 'object' ||
+      Array.isArray(rawBreakout) ||
+      rawBreakout.label !== 'Breakout Watch' ||
+      rawBreakout.calibrated !== false
+    ) return null;
+    const source = safeText(rawBreakout.source, 80);
+    const asOf = validIsoDate(rawBreakout.asOf);
+    const method = safeText(rawBreakout.method, 300);
+    const opportunityKind = safeText(rawBreakout.opportunityKind, 20).toLowerCase();
+    const projectedPoints = finiteNumber(rawBreakout.projectedPoints);
+    const projectedOpportunities = finiteNumber(rawBreakout.projectedOpportunities);
+    const experienceYears = rawBreakout.experienceYears;
+    const pointsPercentile = finiteNumber(rawBreakout.pointsPercentile);
+    const opportunityPercentile = finiteNumber(rawBreakout.opportunityPercentile);
+    const positionKinds = BREAKOUT_KINDS_BY_POSITION[playerPosition];
+    if (
+      !source || !asOf || !method ||
+      !BREAKOUT_OPPORTUNITY_KINDS.has(opportunityKind) ||
+      !positionKinds?.has(opportunityKind) ||
+      projectedPoints === null || projectedPoints <= 0 || projectedPoints > 1_000 ||
+      projectedOpportunities === null || projectedOpportunities < 1 || projectedOpportunities > 1_000 ||
+      !Number.isInteger(experienceYears) || experienceYears < 0 || experienceYears > 30 ||
+      pointsPercentile === null || pointsPercentile < 0 || pointsPercentile > 1 ||
+      opportunityPercentile === null || opportunityPercentile < 0 || opportunityPercentile > 1
+    ) return null;
+    return {
+      label: 'Breakout Watch · uncalibrated',
+      detail: [
+        source,
+        `as of ${asOf}`,
+        `${displayNumber(projectedPoints)} projected points`,
+        `${displayNumber(projectedOpportunities)} ${opportunityKind}`,
+        `year ${experienceYears}`,
+      ].join(' · '),
+      method,
+    };
+  }
+
+  function plannedPlayer(rawPlayer) {
+    if (!rawPlayer || typeof rawPlayer !== 'object' || Array.isArray(rawPlayer)) return null;
+    const name = safeText(rawPlayer.name, 120);
+    const position = safeText(rawPlayer.position, 16).toUpperCase();
+    const team = safeText(rawPlayer.team, 16, 'NFL team unknown');
+    const score = finiteNumber(rawPlayer.score);
+    if (!name || !PLAYER_POSITIONS.has(position) || score === null || score < 0 || score > 100) {
+      return null;
+    }
+    return { name, position, team };
+  }
+
+  function playerIdentity(player) {
+    return `${player.name}\u0000${player.position}\u0000${player.team}`;
+  }
+
+  function nextTwoPicksPlan(rawPlan, rawRecommendations) {
+    if (
+      !rawPlan ||
+      typeof rawPlan !== 'object' ||
+      Array.isArray(rawPlan) ||
+      !['ready', 'degraded'].includes(rawPlan.status) ||
+      rawPlan.probabilitiesCalibrated !== false ||
+      !safeText(rawPlan.method, 300) ||
+      !Array.isArray(rawRecommendations) ||
+      rawRecommendations.length === 0 ||
+      !Array.isArray(rawPlan.fallbacksNow) ||
+      !Array.isArray(rawPlan.nextUserPicks) ||
+      !Array.isArray(rawPlan.combinations) ||
+      !Array.isArray(rawPlan.uncertainties)
+    ) return null;
+
+    const primary = plannedPlayer(rawPlan.primaryNow);
+    const deterministicPrimary = plannedPlayer({
+      ...rawRecommendations[0]?.player,
+      score: rawRecommendations[0]?.overallScore,
+    });
+    if (
+      !primary ||
+      !deterministicPrimary ||
+      playerIdentity(primary) !== playerIdentity(deterministicPrimary)
+    ) return null;
+
+    const rawFallbacks = rawPlan.fallbacksNow;
+    if (rawFallbacks.length > 2) return null;
+    const fallbacks = rawFallbacks.map(plannedPlayer);
+    if (fallbacks.some((player) => player === null)) return null;
+    const optionIdentities = new Set([primary, ...fallbacks].map(playerIdentity));
+
+    const rawPicks = rawPlan.nextUserPicks;
+    const picksAreValid = rawPicks.length === 2 && rawPicks.every((value) => (
+      typeof value === 'number' && Number.isInteger(value) && value > 0
+    )) && rawPicks[1] > rawPicks[0];
+    if (rawPicks.length !== 0 && !picksAreValid) return null;
+
+    const rawCombinations = rawPlan.combinations;
+    if (rawCombinations.length > 3 || (rawCombinations.length && !picksAreValid)) return null;
+    const combinations = [];
+    for (const rawCombination of rawCombinations) {
+      if (!rawCombination || typeof rawCombination !== 'object' || Array.isArray(rawCombination)) {
+        return null;
+      }
+      const now = plannedPlayer(rawCombination.now);
+      const nextTurn = plannedPlayer(rawCombination.nextTurn);
+      const probability = rawCombination.nextTurnAvailabilityProbability;
+      const probabilityIsUnknown = probability === null;
+      const probabilityIsValid = finiteNumber(probability) !== null && probability >= 0 && probability <= 1;
+      if (
+        !now || !nextTurn ||
+        !optionIdentities.has(playerIdentity(now)) ||
+        rawCombination.probabilityCalibrated !== false ||
+        (!probabilityIsUnknown && !probabilityIsValid)
+      ) return null;
+      combinations.push({
+        label: `${now.name} (${now.position}) \u2192 ${nextTurn.name} (${nextTurn.position})`,
+        availabilityLabel: probabilityIsUnknown
+          ? 'Estimated next-turn availability unknown · uncalibrated heuristic'
+          : `Estimated next-turn availability ${percentage(probability)} · uncalibrated heuristic`,
+        reasons: uniqueStrings(Array.isArray(rawCombination.reasons) ? rawCombination.reasons : [], 3, 240),
+      });
+    }
+    if (rawPlan.status === 'ready' && (!picksAreValid || combinations.length === 0)) return null;
+
+    const summary = safeText(rawPlan.summary, 400);
+    if (!summary) return null;
+    return {
+      status: rawPlan.status,
+      statusLabel: rawPlan.status === 'ready'
+        ? 'Two-pick plan ready'
+        : 'Two-pick plan needs caution',
+      summary,
+      pickLabel: picksAreValid
+        ? `Your selections: ${rawPicks[0]}, then ${rawPicks[1]}`
+        : 'Future selection order is unknown',
+      primaryLabel: `Primary now: ${primary.name} · ${primary.position} · ${primary.team}`,
+      fallbackLabels: fallbacks.map((player) => (
+        `Fallback now: ${player.name} · ${player.position} · ${player.team}`
+      )),
+      combinations,
+      uncertainties: uniqueStrings(rawPlan.uncertainties, 6, 300),
+    };
   }
 
   function machineCode(value) {
@@ -484,6 +649,11 @@
       byeWeek === null ? '' : `Bye ${Math.trunc(byeWeek)}`,
     ].filter(Boolean);
     const action = marketAction(item?.decisionSignals?.action);
+    const breakout = breakoutWatch(
+      item?.breakoutWatch,
+      options.breakoutEvidenceAvailable,
+      playerPosition,
+    );
     return {
       rankLabel: String(index + 1),
       name: safeText(item?.player?.name, 120, 'Unknown player'),
@@ -503,6 +673,9 @@
       riskLabel,
       riskSourceLabel,
       recentNews,
+      breakoutLabel: breakout?.label || '',
+      breakoutDetail: breakout?.detail || '',
+      breakoutMethod: breakout?.method || '',
       reasoning: uniqueStrings(Array.isArray(item?.reasoning) ? item.reasoning : [], 6),
       badges: marketBadges(item?.decisionSignals?.badges),
       actionLabel: action?.label || '',
@@ -522,6 +695,8 @@
       ledgerIssues: [],
       degradations: [],
       decisionBrief: null,
+      nextTwoPicksPlan: null,
+      breakoutEvidenceNotice: null,
       recommendations: [],
       marketSignals: null,
       advisoryCritic: null,
@@ -575,10 +750,27 @@
         .map((item, index) => recommendationCard(item, index, {
           injuryStatusAvailable: response?.capabilities?.injuryStatus === true,
           externalNewsAvailable: response?.capabilities?.externalNews === true,
+          breakoutEvidenceAvailable: response?.capabilities?.breakoutWatch === true,
         }))
       : [];
     model.decisionBrief = decisionBrief(response.state, model.recommendations);
     model.marketSignals = marketSignals(response.marketSignals);
+    model.nextTwoPicksPlan = (mode === 'success' || mode === 'degraded') && health.complete === true
+      ? nextTwoPicksPlan(response.nextTwoPicksPlan, response.recommendations)
+      : null;
+    const rawBreakoutSummary = response?.cockpit?.breakoutWatch;
+    model.breakoutEvidenceNotice = (mode === 'success' || mode === 'degraded') &&
+      rawBreakoutSummary &&
+      typeof rawBreakoutSummary === 'object' &&
+      !Array.isArray(rawBreakoutSummary) &&
+      rawBreakoutSummary.status === 'unavailable' &&
+      rawBreakoutSummary.calibrated === false
+      ? safeText(
+        rawBreakoutSummary.message,
+        400,
+        'Breakout evidence is unavailable; ordinary recommendations remain usable.',
+      )
+      : null;
     const normalizedAdvisoryCritic = mode === 'success' || mode === 'degraded'
       ? advisoryCritic(response.advisoryCritic)
       : null;

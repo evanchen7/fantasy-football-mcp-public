@@ -65,6 +65,7 @@ def local_profile() -> dict:
                     "average_draft_position",
                     "bye_week",
                     "bye",
+                    "breakout_evidence",
                 }
             }
             for player in rankings()
@@ -192,6 +193,41 @@ def fantasypros_result(profile: dict, *, status: str = "success") -> dict:
     }
 
 
+def test_fantasypros_merge_preserves_local_breakout_evidence() -> None:
+    evidence = {
+        "source": "Example Projections",
+        "as_of": "2026-08-20",
+        "projected_points": 210.0,
+        "projected_opportunities": 72.0,
+        "opportunity_kind": "receptions",
+        "experience_years": 2,
+    }
+    local_ranking = {
+        "name": "Young Receiver",
+        "position": "WR",
+        "team": "SEA",
+        "rank": 1,
+        "breakout_evidence": evidence,
+    }
+    provider_result = {
+        "status": "success",
+        "players": [{
+            "name": "Young Receiver",
+            "position": "WR",
+            "team": "SEA",
+            "identityResolved": True,
+            "injury_status": "unknown",
+        }],
+    }
+
+    merged, _summary = recommendation_service._merge_fantasypros_updates(
+        [local_ranking], provider_result
+    )
+
+    assert merged[0]["breakout_evidence"] == evidence
+    assert merged[0]["injury_status"] == "unknown"
+
+
 @pytest.mark.asyncio
 async def test_local_profile_avoids_yahoo_and_adds_fantasypros_evidence(
     tmp_path: Path, monkeypatch
@@ -235,6 +271,7 @@ async def test_local_profile_avoids_yahoo_and_adds_fantasypros_evidence(
         "opponentModel": "heuristic",
         "scenarioSimulation": True,
         "llmOnRequestPath": False,
+        "breakoutWatch": False,
         "rosterSlotsAvailable": True,
     }
     assert result["dataSources"] == {

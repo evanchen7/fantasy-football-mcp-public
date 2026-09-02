@@ -51,6 +51,21 @@ test('renders all server-provided content as inert text with accessible structur
       primaryMeta: 'WR · SEA',
       fallbacks: [{ name: 'Safe fallback', meta: 'RB · DEN' }],
     },
+    nextTwoPicksPlan: {
+      status: 'degraded',
+      statusLabel: 'Two-pick plan needs caution',
+      summary: malicious,
+      pickLabel: 'Your selections: 7, then 18',
+      primaryLabel: `Primary now: ${malicious} · WR · SEA`,
+      fallbackLabels: ['Fallback now: Safe fallback · RB · DEN'],
+      combinations: [{
+        label: `${malicious} (WR) → Safe fallback (RB)`,
+        availabilityLabel: 'Estimated next-turn availability 63% · uncalibrated heuristic',
+        reasons: [malicious],
+      }],
+      uncertainties: [malicious],
+    },
+    breakoutEvidenceNotice: 'Breakout evidence is unavailable.',
     recommendations: [{
       rankLabel: '1',
       name: malicious,
@@ -64,6 +79,9 @@ test('renders all server-provided content as inert text with accessible structur
       riskLabel: 'Injury/news: unknown — not assumed healthy',
       riskSourceLabel: 'Source: FantasyPros · updated 2026-09-01T22:15:00Z',
       recentNews: [malicious],
+      breakoutLabel: 'Breakout Watch · uncalibrated',
+      breakoutDetail: 'Example Projections · as of 2026-08-20 · 210 projected points · 125 targets · year 2',
+      breakoutMethod: malicious,
       reasoning: [malicious],
     }],
     contingency: ['If unavailable: Player 2'],
@@ -80,6 +98,10 @@ test('renders all server-provided content as inert text with accessible structur
   assert.equal(findAll(root, (node) => node.className.includes('decision-brief--next')).length, 1);
   assert.match(root.textContent, /Recommended now/);
   assert.match(root.textContent, /If unavailable/);
+  assert.match(root.textContent, /Next two selections/);
+  assert.match(root.textContent, /uncalibrated heuristic/);
+  assert.match(root.textContent, /Breakout Watch · uncalibrated/);
+  assert.match(root.textContent, /Breakout evidence is unavailable/);
 });
 
 test('renders exact blocker details and an empty-state instead of player cards', () => {
@@ -94,6 +116,8 @@ test('renders exact blocker details and an empty-state instead of player cards',
     ledgerIssues: ['Missing pick numbers: 3', 'Duplicate pick numbers: 5'],
     degradations: [],
     decisionBrief: null,
+    nextTwoPicksPlan: null,
+    breakoutEvidenceNotice: null,
     recommendations: [],
     contingency: [],
     emptyMessage: 'Open Results → Round by Round and use Full rescan & repair.',
@@ -119,6 +143,8 @@ test('renders an available AI critic after deterministic recommendations as iner
     draftContext: [],
     ledgerIssues: [],
     degradations: [],
+    nextTwoPicksPlan: null,
+    breakoutEvidenceNotice: null,
     recommendations: [{
       rankLabel: '1',
       name: 'Deterministic Player',

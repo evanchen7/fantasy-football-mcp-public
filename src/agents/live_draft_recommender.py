@@ -21,9 +21,10 @@ from datetime import datetime, timezone
 from functools import lru_cache
 from typing import Any
 
+from src.agents.breakout_watch import evaluate_breakout_watch
 from src.agents.draft_market_signals import build_market_decision_payload
+from src.agents.next_two_picks_planner import plan_next_two_picks
 from src.services.yahoo_player_identity import normalize_yahoo_player_key
-
 _POSITION_ALIASES = {
     "DEF": "DST",
     "D/ST": "DST",
@@ -71,6 +72,23 @@ _STRATEGY_WEIGHTS = {
     },
 }
 _COCKPIT_POSITIONS = ("OVERALL", "QB", "RB", "WR", "TE", "FLEX", "K", "DST")
+
+
+def _breakout_summary(result: Mapping[str, Any]) -> dict[str, Any]:
+    """Expose only bounded model metadata; per-player labels stay on candidate cards."""
+
+    return {
+        "status": "available" if result.get("status") == "available" else "unavailable",
+        "method": str(result.get("method") or "")[:300],
+        "calibrated": False,
+        "coveragePositions": [
+            str(position)[:16]
+            for position in result.get("coveragePositions", [])[:3]
+            if isinstance(position, str)
+        ],
+        "evidencePlayers": max(0, min(int(_number(result.get("evidencePlayers"), 0)), 500)),
+        "message": str(result.get("message") or "")[:300],
+    }
 
 
 def _rounded_normalized_weights(weights: Mapping[str, float]) -> dict[str, float]:
@@ -403,7 +421,10 @@ class Candidate:
         if not name or not position:
             return None
         rank = _number(value.get("rank"), fallback_rank)
-        adp = _optional_positive_number(value.get("average_draft_position"))
+        raw_adp = value.get("average_draft_position")
+        if raw_adp is None:
+            raw_adp = value.get("adp")
+        adp = _optional_positive_number(raw_adp)
         return cls(dict(value), name, position, str(value.get("team") or ""), rank, adp)
 
 
@@ -829,9 +850,8 @@ class LiveDraftRecommendationEngine:
         warnings = list(state["health"]["warnings"])
         risk_agent = RiskNewsAgent(reference_time)
         ranking_candidates = [
-            Candidate.from_mapping(item, index)
+            Candidate.from_mapping(item, index) if isinstance(item, Mapping) else None
             for index, item in enumerate(rankings, start=1)
-            if isinstance(item, Mapping)
         ]
         roster_agent = RosterConstructionAgent(state["userRoster"], _roster_positions(league))
         injury_available = any(
@@ -859,6 +879,9 @@ class LiveDraftRecommendationEngine:
             unresolved_drafted=0,
             counts_trustworthy=state["health"]["complete"],
         )
+        breakout_evaluation = evaluate_breakout_watch(rankings, now=reference_time)
+        breakout_labels = breakout_evaluation["labels"]
+        breakout_summary = _breakout_summary(breakout_evaluation)
         base = {
             "source": "live-draft-specialist-suite",
             "strategy": strategy if strategy in _STRATEGY_WEIGHTS else "balanced",
@@ -870,15 +893,18 @@ class LiveDraftRecommendationEngine:
                 "opponentModel": "heuristic",
                 "scenarioSimulation": self.simulations > 0,
                 "llmOnRequestPath": False,
+                "breakoutWatch": breakout_summary["status"] == "available",
             },
             "warnings": warnings,
             "marketSignals": initial_market_signals,
+            "nextTwoPicksPlan": plan_next_two_picks([], state),
             "cockpit": self._cockpit(
                 state,
                 rankings,
                 league,
                 roster_agent,
                 [],
+                breakout_watch=breakout_summary,
                 risk_available=risk_available,
                 blocked=not state["health"]["complete"],
             ),
@@ -901,15 +927,24 @@ class LiveDraftRecommendationEngine:
             )
             return self._empty_result(base, "degraded", self._draft_advice(state), started)
 
-        valid_candidates = [candidate for candidate in ranking_candidates if candidate is not None]
+        valid_candidates = [
+            (index, candidate)
+            for index, candidate in enumerate(ranking_candidates)
+            if candidate is not None
+        ]
         candidates: list[Candidate] = []
         drafted_count = 0
+        candidate_breakout_labels: list[dict[str, Any] | None] = []
         unresolved_drafted: list[str] = []
-        for candidate in valid_candidates:
+        for index, candidate in valid_candidates:
             if any(_same_player(pick, candidate.raw) for pick in state["picks"]):
                 drafted_count += 1
                 continue
             candidates.append(candidate)
+            raw_label = breakout_labels[index] if index < len(breakout_labels) else None
+            candidate_breakout_labels.append(
+                dict(raw_label) if isinstance(raw_label, Mapping) else None
+            )
         for pick in state["picks"]:
             if not any(_same_player(pick, raw) for raw in rankings if isinstance(raw, Mapping)):
                 unresolved_drafted.append(str(pick.get("player") or "unknown"))
@@ -938,7 +973,9 @@ class LiveDraftRecommendationEngine:
         pool_size = max(len(rankings), 100)
         evaluated = []
 
-        for candidate in candidates:
+        for candidate, breakout_label in zip(
+            candidates, candidate_breakout_labels, strict=True
+        ):
             value, value_detail = value_agent.score(
                 candidate, state["currentOverallPick"], pool_size
             )
@@ -970,46 +1007,47 @@ class LiveDraftRecommendationEngine:
                 risk_detail,
                 opponent_detail,
             )
-            evaluated.append(
-                {
-                    "player": {
-                        "name": candidate.name,
-                        "position": candidate.position,
-                        "team": candidate.team,
-                        **(
-                            {"playerKey": yahoo_player_key}
-                            if (
-                                yahoo_player_key := normalize_yahoo_player_key(
-                                    candidate.raw.get("player_key")
-                                    or candidate.raw.get("playerKey")
-                                )
+            evaluated_candidate = {
+                "player": {
+                    "name": candidate.name,
+                    "position": candidate.position,
+                    "team": candidate.team,
+                    **(
+                        {"playerKey": yahoo_player_key}
+                        if (
+                            yahoo_player_key := normalize_yahoo_player_key(
+                                candidate.raw.get("player_key")
+                                or candidate.raw.get("playerKey")
                             )
-                            else {}
-                        ),
-                        "rank": candidate.rank,
-                        "adp": candidate.adp,
-                        "adpAvailable": candidate.adp is not None,
-                        "byeWeek": candidate.raw.get("bye") or candidate.raw.get("bye_week"),
-                    },
-                    "overallScore": round(overall, 2),
-                    "scores": {
-                        key: round(value, 2) if value is not None else None
-                        for key, value in scores.items()
-                    },
-                    "effectiveWeights": _rounded_normalized_weights(effective_weights),
-                    "returnProbability": opponent_detail["returnProbability"],
-                    "rosterImpact": roster_detail["impact"],
-                    "reasoning": reasoning,
-                    "risk": risk_detail,
-                    "specialistDetails": {
-                        "value": value_detail,
-                        "rosterConstruction": roster_detail,
-                        "draftDynamics": dynamics_detail,
-                        "opponentModel": opponent_detail,
-                        "scenario": scenario_detail,
-                    },
-                }
-            )
+                        )
+                        else {}
+                    ),
+                    "rank": candidate.rank,
+                    "adp": candidate.adp,
+                    "adpAvailable": candidate.adp is not None,
+                    "byeWeek": candidate.raw.get("bye") or candidate.raw.get("bye_week"),
+                },
+                "overallScore": round(overall, 2),
+                "scores": {
+                    key: round(value, 2) if value is not None else None
+                    for key, value in scores.items()
+                },
+                "effectiveWeights": _rounded_normalized_weights(effective_weights),
+                "returnProbability": opponent_detail["returnProbability"],
+                "rosterImpact": roster_detail["impact"],
+                "reasoning": reasoning,
+                "risk": risk_detail,
+                "specialistDetails": {
+                    "value": value_detail,
+                    "rosterConstruction": roster_detail,
+                    "draftDynamics": dynamics_detail,
+                    "opponentModel": opponent_detail,
+                    "scenario": scenario_detail,
+                },
+            }
+            if isinstance(breakout_label, Mapping):
+                evaluated_candidate["breakoutWatch"] = dict(breakout_label)
+            evaluated.append(evaluated_candidate)
 
         evaluated, base["marketSignals"] = build_market_decision_payload(
             state,
@@ -1043,12 +1081,19 @@ class LiveDraftRecommendationEngine:
         critic = RecommendationCritic().review(
             selected, state, bool(rankings), len(unresolved_drafted)
         )
+        next_two_plan = plan_next_two_picks(
+            evaluated, state, unresolved_drafted=len(unresolved_drafted)
+        )
+        base["capabilities"]["breakoutWatch"] = (
+            breakout_summary["status"] == "available"
+        )
         result = {
             **base,
             "status": "success" if critic["passed"] else "degraded",
             "primaryRecommendation": selected[0],
             "alternatives": selected[1:3],
             "recommendations": selected,
+            "nextTwoPicksPlan": next_two_plan,
             "appliedWeights": _rounded_normalized_weights(weights),
             "contingency": {
                 "ifPrimaryUnavailable": (
@@ -1076,6 +1121,7 @@ class LiveDraftRecommendationEngine:
                 league,
                 roster_agent,
                 evaluated,
+                breakout_watch=breakout_summary,
                 risk_available=risk_available,
                 blocked=False,
             ),
@@ -1484,6 +1530,7 @@ class LiveDraftRecommendationEngine:
         roster_agent: RosterConstructionAgent,
         evaluated: Sequence[Mapping[str, Any]],
         *,
+        breakout_watch: Mapping[str, Any],
         risk_available: bool,
         blocked: bool,
     ) -> dict[str, Any]:
@@ -1501,6 +1548,7 @@ class LiveDraftRecommendationEngine:
             "fallbackTiers": [] if blocked else cls._fallback_tiers(position_boards),
             "readiness": cls._readiness(state, rankings, league),
             "recap": cls._recap(state, rankings, roster_plan, blocked=blocked),
+            "breakoutWatch": dict(breakout_watch),
         }
 
     @staticmethod

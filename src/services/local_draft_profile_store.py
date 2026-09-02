@@ -41,7 +41,21 @@ _STORE_LOCK = threading.Lock()
 _SESSION_KEY = re.compile(r"^[A-Za-z0-9_-]{1,32}:[A-Za-z0-9_-]{1,64}$")
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9_-]+$")
 _TEAM = re.compile(r"^[A-Z0-9]{1,8}$")
+_BREAKOUT_SOURCE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._()&'+-]{0,79}$")
 _CANDIDATE_POSITIONS = {"QB", "RB", "WR", "TE", "K", "DST"}
+_BREAKOUT_EVIDENCE_FIELDS = {
+    "source",
+    "as_of",
+    "projected_points",
+    "projected_opportunities",
+    "opportunity_kind",
+    "experience_years",
+}
+_BREAKOUT_OPPORTUNITY_KINDS = {
+    "RB": {"touches"},
+    "WR": {"targets", "receptions"},
+    "TE": {"targets", "receptions"},
+}
 _ROSTER_ORDER = (
     "QB",
     "RB",
@@ -296,7 +310,59 @@ def _normalize_position(value: Any, *, roster: bool) -> str:
     return position
 
 
-def _sanitize_candidate(value: Any, index: int) -> dict[str, Any]:
+def _sanitize_breakout_evidence(
+    value: Any, *, index: int, position: str, season: int
+) -> dict[str, Any]:
+    field = f"rankings[{index}].breakout_evidence"
+    if not isinstance(value, Mapping) or set(value) != _BREAKOUT_EVIDENCE_FIELDS:
+        raise LocalDraftProfileValidationError(f"{field} fields are invalid")
+    expected_kinds = _BREAKOUT_OPPORTUNITY_KINDS.get(position)
+    if expected_kinds is None:
+        raise LocalDraftProfileValidationError(
+            f"{field} is supported only for RB, WR, and TE players"
+        )
+    source = _safe_string(value.get("source"), f"{field}.source", 80)
+    if not _BREAKOUT_SOURCE.fullmatch(source) or _PRIVATE_PLAYER_TEXT.search(source):
+        raise LocalDraftProfileValidationError(f"{field}.source is invalid")
+    as_of = _safe_string(value.get("as_of"), f"{field}.as_of", 10)
+    try:
+        parsed_as_of = date.fromisoformat(as_of)
+    except ValueError as error:
+        raise LocalDraftProfileValidationError(
+            f"{field}.as_of must be an ISO date"
+        ) from error
+    if parsed_as_of.year != season:
+        raise LocalDraftProfileValidationError(
+            f"{field}.as_of year must match profile season"
+        )
+    opportunity_kind = _safe_string(
+        value.get("opportunity_kind"), f"{field}.opportunity_kind", 16
+    ).casefold()
+    if opportunity_kind not in expected_kinds:
+        expected_label = " or ".join(sorted(expected_kinds))
+        raise LocalDraftProfileValidationError(
+            f"{field}.opportunity_kind must be {expected_label} for {position}"
+        )
+    return {
+        "source": source,
+        "as_of": parsed_as_of.isoformat(),
+        "projected_points": _strict_number(
+            value.get("projected_points"), f"{field}.projected_points", 0.01, 1_000
+        ),
+        "projected_opportunities": _strict_number(
+            value.get("projected_opportunities"),
+            f"{field}.projected_opportunities",
+            1,
+            1_000,
+        ),
+        "opportunity_kind": opportunity_kind,
+        "experience_years": _strict_integer(
+            value.get("experience_years"), f"{field}.experience_years", 0, 30
+        ),
+    }
+
+
+def _sanitize_candidate(value: Any, index: int, season: int) -> dict[str, Any]:
     if not isinstance(value, Mapping):
         raise LocalDraftProfileValidationError(f"rankings[{index}] must be an object")
     name = _safe_player_name(value.get("name"), f"rankings[{index}].name")
@@ -330,6 +396,13 @@ def _sanitize_candidate(value: Any, index: int) -> dict[str, Any]:
                 f"rankings[{index}].player_key has an invalid format"
             )
         result["player_key"] = player_key
+    if "breakout_evidence" in value and value["breakout_evidence"] is not None:
+        result["breakout_evidence"] = _sanitize_breakout_evidence(
+            value["breakout_evidence"],
+            index=index,
+            position=position,
+            season=season,
+        )
     return result
 
 
@@ -405,7 +478,8 @@ def sanitize_local_draft_profile(value: Any) -> dict[str, Any]:
             f"rankings cannot exceed {MAX_CANDIDATES} candidates"
         )
     rankings = [
-        _sanitize_candidate(candidate, index) for index, candidate in enumerate(raw_rankings)
+        _sanitize_candidate(candidate, index, season)
+        for index, candidate in enumerate(raw_rankings)
     ]
     rankings.sort(key=lambda candidate: (candidate["rank"], candidate["name"]))
     ranks: set[int] = set()

@@ -87,6 +87,46 @@
     return section;
   }
 
+  function renderNextTwoPicksPlan(documentRef, plan) {
+    const status = plan?.status === 'ready' ? 'ready' : 'degraded';
+    const section = element(documentRef, 'section', `two-pick-plan two-pick-plan--${status}`);
+    section.setAttribute('aria-label', 'Next two selections plan');
+    section.appendChild(element(documentRef, 'h2', '', 'Next two selections'));
+    section.appendChild(element(documentRef, 'p', 'two-pick-status', plan.statusLabel));
+    section.appendChild(element(documentRef, 'p', 'two-pick-summary', plan.summary));
+    section.appendChild(element(documentRef, 'p', 'two-pick-order', plan.pickLabel));
+    section.appendChild(element(documentRef, 'p', 'two-pick-primary', plan.primaryLabel));
+    if (plan.fallbackLabels?.length) {
+      section.appendChild(list(documentRef, plan.fallbackLabels, 'two-pick-fallbacks'));
+    }
+    if (plan.combinations?.length) {
+      const combinations = element(documentRef, 'section', 'two-pick-combinations');
+      combinations.appendChild(element(documentRef, 'h3', '', 'Position-aware combinations'));
+      for (const combination of plan.combinations) {
+        const combinationNode = element(documentRef, 'article', 'two-pick-combination');
+        combinationNode.appendChild(element(documentRef, 'strong', '', combination.label));
+        combinationNode.appendChild(element(
+          documentRef,
+          'p',
+          'two-pick-availability',
+          combination.availabilityLabel,
+        ));
+        if (combination.reasons?.length) {
+          combinationNode.appendChild(list(documentRef, combination.reasons, 'two-pick-reasons'));
+        }
+        combinations.appendChild(combinationNode);
+      }
+      section.appendChild(combinations);
+    }
+    if (plan.uncertainties?.length) {
+      const uncertainties = element(documentRef, 'section', 'two-pick-uncertainties');
+      uncertainties.appendChild(element(documentRef, 'h3', '', 'Planning uncertainties'));
+      uncertainties.appendChild(list(documentRef, plan.uncertainties, 'two-pick-uncertainty-list'));
+      section.appendChild(uncertainties);
+    }
+    return section;
+  }
+
   function renderRecommendation(documentRef, recommendation) {
     const card = element(documentRef, 'article', 'recommendation-card');
     const heading = element(documentRef, 'div', 'recommendation-heading');
@@ -113,6 +153,14 @@
 
     if (recommendation.valueLabel) {
       card.appendChild(element(documentRef, 'p', 'value-label', recommendation.valueLabel));
+    }
+    if (recommendation.breakoutLabel) {
+      const breakout = element(documentRef, 'section', 'breakout-watch');
+      breakout.setAttribute('aria-label', 'Breakout Watch evidence');
+      breakout.appendChild(element(documentRef, 'strong', 'breakout-label', recommendation.breakoutLabel));
+      breakout.appendChild(element(documentRef, 'p', 'breakout-detail', recommendation.breakoutDetail));
+      breakout.appendChild(element(documentRef, 'p', 'breakout-method', recommendation.breakoutMethod));
+      card.appendChild(breakout);
     }
 
     const metrics = element(documentRef, 'div', 'recommendation-metrics');
@@ -275,6 +323,18 @@
 
     const marketSignals = renderMarketSignals(documentRef, model.marketSignals);
     if (marketSignals) root.appendChild(marketSignals);
+
+    if (model.nextTwoPicksPlan) {
+      root.appendChild(renderNextTwoPicksPlan(documentRef, model.nextTwoPicksPlan));
+    }
+
+    if (model.breakoutEvidenceNotice) {
+      const breakoutNotice = element(documentRef, 'section', 'notice notice--quality');
+      breakoutNotice.setAttribute('aria-label', 'Breakout evidence availability');
+      breakoutNotice.appendChild(element(documentRef, 'h2', '', 'Breakout evidence unavailable'));
+      breakoutNotice.appendChild(element(documentRef, 'p', '', model.breakoutEvidenceNotice));
+      root.appendChild(breakoutNotice);
+    }
 
     if (model.ledgerIssues.length) {
       const blockers = element(documentRef, 'section', 'notice notice--blocked');

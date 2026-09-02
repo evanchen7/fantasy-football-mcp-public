@@ -142,6 +142,101 @@ def test_sanitizes_canonical_profile_and_strips_unknown_fields() -> None:
     assert "secret" not in json.dumps(sanitized)
 
 
+def test_sanitizes_explicit_sourced_breakout_evidence() -> None:
+    profile = local_profile()
+    profile["rankings"][0]["breakout_evidence"] = {
+        "source": "Example Projections",
+        "as_of": "2026-08-20",
+        "projected_points": 285.25,
+        "projected_opportunities": 265,
+        "opportunity_kind": "touches",
+        "experience_years": 2,
+    }
+
+    sanitized = sanitize_local_draft_profile(profile)
+
+    assert sanitized["rankings"][0]["breakout_evidence"] == {
+        "source": "Example Projections",
+        "as_of": "2026-08-20",
+        "projected_points": 285.25,
+        "projected_opportunities": 265.0,
+        "opportunity_kind": "touches",
+        "experience_years": 2,
+    }
+
+
+@pytest.mark.parametrize(
+    ("evidence", "message"),
+    [
+        ({"source": "Example Projections"}, "fields"),
+        (
+            {
+                "source": "https://example.test/?token=secret",
+                "as_of": "2026-08-20",
+                "projected_points": 100,
+                "projected_opportunities": 100,
+                "opportunity_kind": "touches",
+                "experience_years": 2,
+            },
+            "source",
+        ),
+        (
+            {
+                "source": "/Users/private/projections.csv",
+                "as_of": "2026-08-20",
+                "projected_points": 100,
+                "projected_opportunities": 100,
+                "opportunity_kind": "touches",
+                "experience_years": 2,
+            },
+            "source",
+        ),
+        (
+            {
+                "source": "Example Projections",
+                "as_of": "2025-08-20",
+                "projected_points": 100,
+                "projected_opportunities": 100,
+                "opportunity_kind": "touches",
+                "experience_years": 2,
+            },
+            "season",
+        ),
+        (
+            {
+                "source": "Example Projections",
+                "as_of": "2026-08-20",
+                "projected_points": 100,
+                "projected_opportunities": 100,
+                "opportunity_kind": "targets",
+                "experience_years": 2,
+            },
+            "touches",
+        ),
+        (
+            {
+                "source": "Example Projections",
+                "as_of": "2026-08-20",
+                "projected_points": 100,
+                "projected_opportunities": 100,
+                "opportunity_kind": "touches",
+                "experience_years": 2,
+                "private_notes": "do not persist",
+            },
+            "fields",
+        ),
+    ],
+)
+def test_rejects_incomplete_unsafe_or_incompatible_breakout_evidence(
+    evidence: dict, message: str
+) -> None:
+    profile = local_profile()
+    profile["rankings"][0]["breakout_evidence"] = evidence
+
+    with pytest.raises(LocalDraftProfileValidationError, match=message):
+        sanitize_local_draft_profile(profile)
+
+
 @pytest.mark.parametrize(
     ("mutate", "message"),
     [

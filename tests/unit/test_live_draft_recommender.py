@@ -279,8 +279,34 @@ def test_recommendations_propagate_only_a_valid_yahoo_player_key() -> None:
     )
 
     assert keyed["player"]["playerKey"] == "461.p.100042"
+def test_candidate_output_distinguishes_missing_adp_from_rank_fallback() -> None:
+    candidate_pool = [
+        *rankings(),
+        {
+            "name": "No Market ADP",
+            "position": "WR",
+            "team": "SEA",
+            "rank": 13,
+        },
+    ]
 
+    result = LiveDraftRecommendationEngine(simulations=0).recommend(
+        live_context(), candidate_pool, {"teams": 4}, count=20
+    )
 
+    candidate = next(
+        item for item in result["recommendations"]
+        if item["player"]["name"] == "No Market ADP"
+    )
+    assert candidate["player"]["adp"] is None
+    assert candidate["player"]["adpAvailable"] is False
+    assert candidate["specialistDetails"]["value"]["adp"] is None
+    assert candidate["specialistDetails"]["value"]["adpAvailable"] is False
+    assert candidate["specialistDetails"]["value"]["adpDelta"] is None
+    assert "ADP unavailable" in candidate["reasoning"][0]
+    brief = LiveDraftRecommendationEngine._candidate_brief(candidate)
+    assert brief["adp"] is None
+    assert brief["adpAvailable"] is False
 def test_recommender_normalizes_jaguars_team_alias_for_initialed_picks() -> None:
     context = live_context()
     context["picks"].extend(
@@ -354,6 +380,9 @@ def test_full_suite_returns_specialists_scenario_critic_and_contingency() -> Non
     assert first["state"]["nextUserPick"] == 11
     assert first["capabilities"]["externalNews"] is False
     assert first["capabilities"]["injuryStatus"] is True
+    assert first["nextTwoPicksPlan"]["primaryNow"]["name"] == first["primaryRecommendation"]["player"]["name"]
+    assert first["nextTwoPicksPlan"]["nextUserPicks"] == [11, 14]
+    assert first["nextTwoPicksPlan"]["probabilitiesCalibrated"] is False
 
     primary = first["primaryRecommendation"]
     assert set(primary["scores"]) == {
@@ -400,6 +429,7 @@ def test_cockpit_returns_bounded_strategy_tiers_runs_fallbacks_and_readiness() -
         "fallbackTiers",
         "readiness",
         "recap",
+        "breakoutWatch",
     }
     assert [entry["strategy"] for entry in cockpit["strategyComparison"]["strategies"]] == [
         "conservative",
@@ -414,6 +444,121 @@ def test_cockpit_returns_bounded_strategy_tiers_runs_fallbacks_and_readiness() -
     assert all(len(tier["candidates"]) <= 3 for tier in cockpit["fallbackTiers"])
     assert cockpit["readiness"]["ready"] is True
     assert all(isinstance(check["passed"], bool) for check in cockpit["readiness"]["checks"])
+
+
+def test_breakout_watch_requires_fresh_explicit_projection_and_opportunity_evidence() -> None:
+    candidates = rankings()
+    candidates.extend(
+        {
+            "name": f"Evidence Runner {index}",
+            "position": "RB",
+            "team": "BUF",
+            "rank": 20 + index,
+            "average_draft_position": 100 + index,
+            "recentNews": [{"headline": "This text must not affect the label"}],
+            "breakout_evidence": {
+                "source": "Example Projections",
+                "as_of": "2026-08-20",
+                "projected_points": 100 + index * 20,
+                "projected_opportunities": 100 + index * 25,
+                "opportunity_kind": "touches",
+                "experience_years": 2,
+            },
+        }
+        for index in range(1, 6)
+    )
+
+    result = LiveDraftRecommendationEngine(simulations=0).recommend(
+        live_context(),
+        candidates,
+        {"teams": 4},
+        count=20,
+        now=datetime(2026, 9, 1, tzinfo=timezone.utc),
+    )
+
+    labeled = [item for item in result["recommendations"] if "breakoutWatch" in item]
+    assert labeled
+    assert all(item["breakoutWatch"]["label"] == "Breakout Watch" for item in labeled)
+    assert all(item["breakoutWatch"]["calibrated"] is False for item in labeled)
+    assert result["cockpit"]["breakoutWatch"] == {
+        "status": "available",
+        "method": (
+            "explicit fresh sourced projection and opportunity evidence; same-position, "
+            "same-source cohort heuristic; ADP and news are excluded"
+        ),
+        "calibrated": False,
+        "coveragePositions": ["RB"],
+        "evidencePlayers": 5,
+        "message": (
+            "Breakout labels use fresh sourced projection and opportunity evidence and are "
+            "uncalibrated."
+        ),
+    }
+
+
+def test_missing_breakout_evidence_is_explained_without_degrading_recommendations() -> None:
+    result = LiveDraftRecommendationEngine(simulations=0).recommend(
+        live_context(), rankings(), {"teams": 4}, count=5
+    )
+
+    assert result["status"] == "success"
+    assert all("breakoutWatch" not in item for item in result["recommendations"])
+    assert result["capabilities"]["breakoutWatch"] is False
+    assert result["cockpit"]["breakoutWatch"]["status"] == "unavailable"
+    assert "projection" in result["cockpit"]["breakoutWatch"]["message"].lower()
+
+
+def test_breakout_classification_stays_stable_as_the_ledger_advances() -> None:
+    candidates = rankings()
+    candidates.extend(
+        {
+            "name": f"Evidence Runner {index}",
+            "position": "RB",
+            "team": "BUF",
+            "rank": 20 + index,
+            "average_draft_position": 100 + index,
+            "breakout_evidence": {
+                "source": "Example Projections",
+                "as_of": "2026-08-20",
+                "projected_points": 100 + index * 20,
+                "projected_opportunities": 100 + index * 25,
+                "opportunity_kind": "touches",
+                "experience_years": 2,
+            },
+        }
+        for index in range(1, 6)
+    )
+    advanced = live_context()
+    advanced["picks"].append(
+        {
+            "pickNumber": 7,
+            "player": "Evidence Runner 1",
+            "position": "RB",
+            "nflTeam": "BUF",
+            "fantasyTeam": "Alpha",
+            "isUserPick": False,
+        }
+    )
+
+    before = LiveDraftRecommendationEngine(simulations=0).recommend(
+        live_context(), candidates, {"teams": 4}, count=20, now=datetime(2026, 9, 1, tzinfo=timezone.utc)
+    )
+    after = LiveDraftRecommendationEngine(simulations=0).recommend(
+        advanced, candidates, {"teams": 4}, count=20, now=datetime(2026, 9, 1, tzinfo=timezone.utc)
+    )
+
+    before_label = next(
+        item["breakoutWatch"]
+        for item in before["recommendations"]
+        if item["player"]["name"] == "Evidence Runner 5"
+    )
+    after_label = next(
+        item["breakoutWatch"]
+        for item in after["recommendations"]
+        if item["player"]["name"] == "Evidence Runner 5"
+    )
+    assert before_label == after_label
+    assert after["cockpit"]["breakoutWatch"]["evidencePlayers"] == 5
 
 
 def test_cockpit_roster_plan_and_recap_use_configured_slots_and_adp_only() -> None:
@@ -482,6 +627,8 @@ def test_gap_in_numbered_ledger_blocks_player_recommendations() -> None:
     assert result["recommendations"] == []
     assert result["state"]["health"]["missingPickNumbers"] == [4]
     assert any("gap" in warning.lower() for warning in result["warnings"])
+    assert result["nextTwoPicksPlan"]["status"] == "blocked"
+    assert result["nextTwoPicksPlan"]["primaryNow"] is None
 
 
 def test_authoritative_capture_integrity_blocks_complete_ledger_recommendations() -> None:
