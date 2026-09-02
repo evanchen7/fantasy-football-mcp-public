@@ -55,7 +55,7 @@ chmod 600 .env
 
 Edit `.env` locally. Do not paste real values into issues, chat, screenshots, browser storage, or MCP configuration checked into Git.
 
-For API-free live draft recommendations, the Yahoo variables may remain unset. Optional FantasyPros injury/news enrichment needs only:
+For API-free live draft recommendations, the Yahoo variables may remain unset. Optional FantasyPros injury/news/projection enrichment needs only:
 
 ```env
 FANTASY_PROS_API=your_key_here
@@ -124,7 +124,7 @@ The recorder continues watching new picks when other Yahoo draft panels are visi
 
 The dashboard's **Local draft profile** section accepts:
 
-- A supported DraftSheets 2026 `.xlsx` workbook, up to 2 MB
+- A supported DraftSheets 2026 `.xlsx` workbook, up to 2 MB; reception scoring of 0, 0.5, or 1 is retained when present
 - An ECR `.csv` with required rank/ECR, player-name, and position columns; team, ADP, bye, and Yahoo player key are optional
 - A strict `schemaVersion: 1` `.json` profile
 
@@ -196,23 +196,27 @@ An unsafe, ambiguous, or truncated authoritative scan preserves the prior number
 
 If the server says the draft changed during reset, rescan and confirm Reset again. Neither operation can target a merely “latest” draft; the exact active identity is required.
 
-## FantasyPros injury/news cache
+## FantasyPros evidence cache
 
-Set `FANTASY_PROS_API` to enable attributed NFL injury status and recent-news evidence from the [FantasyPros public API](https://api.fantasypros.com/public/v2/docs#tag/News-and-Injuries). Restart the server after adding or replacing the key.
+Set `FANTASY_PROS_API` to enable attributed NFL injury status, recent news, and preseason RB/WR/TE projection evidence from the [FantasyPros public API](https://api.fantasypros.com/public/v2/docs). Restart the server after adding or replacing the key.
 
 FantasyPros' [public API terms](https://api.fantasypros.com/public/v2/terms-of-use) instruct clients to cache data rather than poll unnecessarily and require FantasyPros attribution when publishing analysis based on it. This app labels the provider as FantasyPros and uses a private local cache to limit network traffic.
 
 The integration is defensive by design:
 
 - The key is sent only as FantasyPros' `x-api-key` header and is never returned to the browser, logged, or written into draft state.
-- Requests are paced at just over one per second, bounded, cached, and backed off after failures or provider rate limits.
+- Requests are paced at just over one per second, bounded, cached, and backed off after failures or provider rate limits. The service caps the entire FantasyPros enrichment phase at 10 seconds so a cold or stalled provider cannot consume the extension's 30-second recommendation deadline.
 - A complete normalized base player catalog is cached for 24 hours; a provider-limited partial catalog is retried after five minutes. Injury and news snapshots are cached for five minutes. Fresh persistent snapshots survive a server restart and avoid both network requests and local request-budget reservations.
+- Preseason projections request `week=0`, the explicit `RB:WR:TE` position set, and an explicit `STD`, `HALF`, or `PPR` scoring code. RB opportunity is projected rushing attempts plus receptions; WR/TE opportunity is projected receptions. Projection snapshots are cached for 24 hours, and absent/malformed values stay unavailable rather than becoming zero. Structured evidence reports returned/reported counts, provider limits, and the public limited-coverage flag.
+- An exact `leagueSettings.scoringFormat` or supported reception-points value selects projection scoring. If reception scoring is unavailable, projections explicitly default to `HALF` and report that provenance. DraftSheets imports now retain `Receptions` values of `0`, `0.5`, or `1` as `STD`, `HALF`, or `PPR`. Projection requests use the validated profile/Yahoo league season; an absent or invalid season falls back to the current UTC year with an explicit warning and provenance.
+- Same-season catalog `rank_adp` is used only for known `STD`, and `rank_adp_ppr` only for known `PPR`. There is no documented half-PPR ADP field, so `HALF` ADP remains unavailable—no interpolation and no ECR-as-ADP substitution.
+- FantasyPros projections do not provide trustworthy career experience. Projection evidence is exposed separately for downstream recommendation features, but this provider/cache slice does not alter deterministic scores or create labels by itself. An automatic breakout label must remain unavailable unless a candidate has genuine imported `experience_years` from another documented source.
 - When a snapshot expires, the provider attempts a normal paced and budgeted refresh. If that refresh fails, last-known-good data up to seven days old may still support identity matching, but recommendation risk remains unknown: stale status is not treated as current and stale headlines are not presented as recent news.
 - This app reserves at most 95 requests per UTC day in a private persistent counter, leaving a margin below the public 100-request limit. Other programs using the same key can still consume the provider's account-wide allowance.
 - Bounded player-detail lookups are used only when at least one requested ranking remains unresolved. Unrelated recent-news IDs do not consume that lookup allowance or produce an identity-coverage warning after the requested ranking pool is already resolved.
 - Only allowlisted player identity, status, timestamp, category, and headline fields reach recommendations. Fresh, exactly resolved rows may still be used when the API labels its overall coverage as limited; missing, unresolved, stale, rate-limited, unavailable, or out-of-coverage players remain explicitly unknown. The UI describes these results as bounded snapshots rather than inferring an API plan, and distinguishes a working feed with no fresh injury match from an unavailable feed.
 
-The first FantasyPros-enabled recommendation automatically fetches the base player catalog, injuries, and news and populates `~/.fantasy-football-mcp/fantasypros-snapshots.sqlite3` with each successful snapshot. No separate prefetch, database migration, or user refresh command is needed. The SQLite cache is bounded to sixteen snapshot variants and 8 MB of normalized record JSON. It contains normalized FantasyPros base snapshots only—not the API key, raw provider bodies, URLs, query strings, targeted identity lookups, Yahoo data, draft state, league IDs, or recommendation candidates. User-facing warnings identify stale fallback; stale per-player status and headlines are suppressed.
+The first FantasyPros-enabled recommendation automatically fetches the base player catalog, injuries, news, and one scoring-specific projection snapshot and populates `~/.fantasy-football-mcp/fantasypros-snapshots.sqlite3`. The cache migrates its prior schema transactionally while preserving valid catalog/injury/news rows; no separate command is needed. The SQLite cache is bounded to sixteen snapshot variants and 8 MB of normalized record JSON. It contains normalized allowlisted evidence only—not the API key, raw provider bodies, URLs, query strings, targeted identity lookups, Yahoo data, draft state, league IDs, or recommendation candidates. User-facing warnings identify stale fallback; stale injury status/headlines remain suppressed and stale projection/ADP provenance remains explicit.
 
 ## Databricks advisory critic
 
@@ -331,7 +335,7 @@ Private runtime data is stored under `~/.fantasy-football-mcp/`. The default dir
 - `live-drafts.json` — sanitized per-league draft sessions
 - `draft-profiles.json` — sanitized rankings, roster settings, and profile provenance
 - `draft-profile-defaults.json` — explicit per-sport pointers to saved default profiles
-- `fantasypros-snapshots.sqlite3` — normalized FantasyPros base snapshots only
+- `fantasypros-snapshots.sqlite3` — normalized FantasyPros catalog, injury, news, and preseason projection snapshots
 - `fantasypros-request-budget.json` — only UTC date and request count
 
 The browser profile separately stores the extension's sanitized per-league recorder state. It may include an extracted numeric Yahoo player key such as `461.p.33536`; the containing link is used only during scanning and is never retained. The recorder does not store Yahoo cookies, OAuth credentials, page URLs, query parameters, chat, or arbitrary page fields. Loopback routes validate origins, cap payloads, allowlist fields, and return recommendation responses with `Cache-Control: no-store`.

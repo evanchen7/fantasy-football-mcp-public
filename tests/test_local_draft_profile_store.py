@@ -237,6 +237,40 @@ def test_rejects_incomplete_unsafe_or_incompatible_breakout_evidence(
         sanitize_local_draft_profile(profile)
 
 
+def test_optional_scoring_format_is_strict_and_backward_compatible() -> None:
+    without_format = sanitize_local_draft_profile(local_profile())
+    assert "scoringFormat" not in without_format["leagueSettings"]
+
+    profile = local_profile()
+    profile["leagueSettings"]["scoringFormat"] = "HALF"
+    assert sanitize_local_draft_profile(profile)["leagueSettings"]["scoringFormat"] == "HALF"
+
+    profile["leagueSettings"]["scoringFormat"] = "half-ppr"
+    with pytest.raises(LocalDraftProfileValidationError, match="scoringFormat"):
+        sanitize_local_draft_profile(profile)
+
+
+def test_draftsheets_receptions_value_maps_to_explicit_scoring_format() -> None:
+    profile = profile_from_draftsheets_rows(
+        [
+            {
+                "RK": 1,
+                "PLAYER NAME": "Jordan Alpha",
+                "TEAM": "SF",
+                "POS": "RB1",
+            }
+        ],
+        [
+            {"#TEAMS:": 12, "QB:": 1, "RB:": 2, "WR:": 2, "RECEPTIONS:": 0.5},
+        ],
+        draft=draft_identity(),
+        imported_at="2026-09-01T16:45:00Z",
+        season=2026,
+    )
+
+    assert profile["leagueSettings"]["scoringFormat"] == "HALF"
+
+
 @pytest.mark.parametrize(
     ("mutate", "message"),
     [
@@ -996,6 +1030,8 @@ def _xlsx_bytes(
     scoring["R4"] = 1
     scoring["S3"] = "IR:"
     scoring["S4"] = 1
+    scoring["T3"] = "Receptions:"
+    scoring["T4"] = 0.5
     ecr = workbook.create_sheet("ECR")
     ecr.append(
         [
@@ -1033,6 +1069,7 @@ def test_parses_bounded_draftsheets_xlsx_without_treating_delta_as_adp() -> None
     ]
     assert all("average_draft_position" not in item for item in profile["rankings"])
     assert profile["provenance"]["asOf"] == "2026-08-31"
+    assert profile["leagueSettings"]["scoringFormat"] == "HALF"
     slots = {
         item["position"]: item["count"] for item in profile["leagueSettings"]["rosterPositions"]
     }
@@ -1065,6 +1102,7 @@ def test_xlsx_roster_overrides_replace_conflicting_workbook_values() -> None:
 
     assert profile["leagueSettings"] == {
         "teams": 12,
+        "scoringFormat": "HALF",
         "rosterPositions": [
             {"position": "QB", "count": 1},
             {"position": "RB", "count": 3},

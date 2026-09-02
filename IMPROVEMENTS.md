@@ -25,6 +25,7 @@ This list separates the delivered live-draft baseline from prioritized follow-up
 - Loopback-only local dashboard with a configurable recommendation board, roster and draft-history views, specialist comparisons, critic checks, and data-source diagnostics.
 - Exact-session local DraftSheets/JSON profile import with bounded parsing, private atomic storage, zero Yahoo API calls when a matching profile is available, and current-season per-sport defaults for future profileless recorder drafts without overwriting exact profiles or copying picks.
 - Optional bounded FantasyPros injury/news enrichment with factual bounded-snapshot disclosures, one-request-per-second pacing, a private persistent 95-call UTC-day budget, FantasyPros attribution, rate-limit backoff, freshness, and per-player unknown-data weighting. Normalized base catalog/injury/news snapshots persist in a private SQLite cache (24-hour complete catalog; five-minute partial-catalog/injury/news retry), so fresh data survives restart without another request; failed refreshes can use stale identity data only while recommendation status/headlines remain unknown. Targeted recent-news identity calls are skipped once every requested ranking already has an exact identity, avoiding irrelevant warnings and request-budget use.
+- Official scoring-specific FantasyPros preseason RB/WR/TE projection snapshots with strictly normalized points and opportunity volume, same-season explicit STD/PPR catalog ADP, a 10-second enrichment deadline, private bounded cache migration, stale provenance, and HALF-PPR ADP left unavailable instead of interpolated. This service-layer evidence does not alter deterministic scoring by itself and does not fabricate experience or breakout labels.
 - Optional disabled-by-default Databricks advisory critic with public OSS SDK dependencies, unified authentication, a strict identity-free outbound allowlist, bounded timeout/output, coalescing and in-memory-only caching, fail-open behavior, and no authority to reorder, score, select, or draft a player.
 - Strict local recommendation UI boundary: allowlisted bounded requests, exact saved/Yahoo league resolution, authenticated-team verification, serialized Yahoo calls, post-scoring snapshot revalidation, and no-store responses.
 - Uncalibrated labels for heuristic probabilities and confidence.
@@ -47,7 +48,7 @@ This list separates the delivered live-draft baseline from prioritized follow-up
    - Next, evaluate identity coverage, cache hit/refresh behavior, and freshness against completed draft snapshots before treating provider coverage as comprehensive.
 
 4. **Scoring-settings fidelity**
-   - Roster-slot and team-count import is delivered for the local DraftSheets path.
+   - Roster-slot, team-count, and strict `STD`/`HALF`/`PPR` reception-format import are delivered for the local DraftSheets path.
    - Incorporate passing-touchdown values, reception scoring, TE premiums, keeper costs, and custom roster eligibility into value and roster scoring; imported point values are not yet modeled directly.
 
 ## P1 — recommendation quality and latency

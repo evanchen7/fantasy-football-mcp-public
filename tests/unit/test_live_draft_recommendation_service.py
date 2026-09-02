@@ -211,13 +211,15 @@ def test_fantasypros_merge_preserves_local_breakout_evidence() -> None:
     }
     provider_result = {
         "status": "success",
-        "players": [{
-            "name": "Young Receiver",
-            "position": "WR",
-            "team": "SEA",
-            "identityResolved": True,
-            "injury_status": "unknown",
-        }],
+        "players": [
+            {
+                "name": "Young Receiver",
+                "position": "WR",
+                "team": "SEA",
+                "identityResolved": True,
+                "injury_status": "unknown",
+            }
+        ],
     }
 
     merged, _summary = recommendation_service._merge_fantasypros_updates(
@@ -226,6 +228,185 @@ def test_fantasypros_merge_preserves_local_breakout_evidence() -> None:
 
     assert merged[0]["breakout_evidence"] == evidence
     assert merged[0]["injury_status"] == "unknown"
+
+
+@pytest.mark.parametrize(
+    ("settings", "expected"),
+    [
+        ({"scoringFormat": "STD"}, ("STD", "leagueSettings.scoringFormat", False)),
+        ({"scoring_format": "PPR"}, ("PPR", "league.scoring_format", False)),
+        ({"pointsPerReception": 0.5}, ("HALF", "league.pointsPerReception", False)),
+        ({"scoring_type": "head"}, ("HALF", "default", True)),
+        ({}, ("HALF", "default", True)),
+    ],
+)
+def test_projection_scoring_resolution_is_explicit_and_never_uses_matchup_type(
+    settings: dict, expected: tuple[str, str, bool]
+) -> None:
+    scoring, provenance = recommendation_service._resolve_projection_scoring(settings)
+
+    assert scoring == expected[0]
+    assert provenance["source"] == expected[1]
+    assert provenance["defaulted"] is expected[2]
+
+
+@pytest.mark.parametrize(
+    ("value", "expected_value", "expected_source", "defaulted"),
+    [
+        (2026, 2026, "yahooLeagueInfo.season", False),
+        ("2026", 2026, "yahooLeagueInfo.season", False),
+        (None, 2026, "currentUtcYear", True),
+        ("not-a-season", 2026, "currentUtcYear", True),
+        (2028, 2026, "currentUtcYear", True),
+    ],
+)
+def test_projection_season_resolution_is_bounded_and_explicit(
+    value: object,
+    expected_value: int,
+    expected_source: str,
+    defaulted: bool,
+) -> None:
+    season, provenance = recommendation_service._resolve_projection_season(
+        value,
+        source="yahooLeagueInfo.season",
+        current_year=2026,
+    )
+
+    assert season == expected_value
+    assert provenance["source"] == expected_source
+    assert provenance["defaulted"] is defaulted
+    assert ("reason" in provenance) is defaulted
+
+
+@pytest.mark.asyncio
+async def test_enrichment_exposes_projection_and_adp_evidence_without_breakout_claims() -> None:
+    profile = local_profile()
+    profile["leagueSettings"]["scoringFormat"] = "PPR"
+    raw = fantasypros_result(profile)
+    raw["players"][0].update(
+        {
+            "projected_points": 247.5,
+            "projected_opportunities": 260.25,
+            "projection_opportunity_kind": "touches",
+            "projection_source": "FantasyPros",
+            "projection_season": 2026,
+            "projection_scoring": "PPR",
+            "projection_source_as_of": None,
+            "projection_fetched_at": "2026-09-01T16:00:00Z",
+            "projection_stale": False,
+            "average_draft_position": 18.0,
+            "adp_source": "FantasyPros",
+            "adp_season": 2026,
+            "adp_scoring": "PPR",
+            "adp_source_as_of": None,
+            "adp_fetched_at": "2026-09-01T16:00:00Z",
+            "adp_stale": False,
+        }
+    )
+    raw["projectionEvidence"] = {
+        "status": "available",
+        "source": "FantasyPros",
+        "season": 2026,
+        "week": 0,
+        "positions": ["RB", "WR", "TE"],
+        "scoring": "PPR",
+        "sourceAsOf": None,
+        "fetchedAt": "2026-09-01T16:00:00Z",
+        "stale": False,
+        "refreshFailed": False,
+        "availablePlayers": 200,
+        "experienceYearsAvailable": False,
+        "returnedCount": 500,
+        "reportedCount": 650,
+        "reportedLimit": 500,
+        "publicApiLimited": True,
+        "raw": "must not escape",
+    }
+    raw["adpEvidence"] = {
+        "status": "available",
+        "reason": None,
+        "source": "FantasyPros",
+        "season": 2026,
+        "scoring": "PPR",
+        "sourceAsOf": None,
+        "fetchedAt": "2026-09-01T16:00:00Z",
+        "stale": False,
+        "refreshFailed": False,
+        "availablePlayers": 500,
+        "publicApiLimited": True,
+    }
+    provider = FakeFantasyProsProvider(raw)
+
+    candidates = [dict(item) for item in profile["rankings"]]
+    candidates[0].pop("average_draft_position", None)
+    merged, summary, warnings = await recommendation_service._enrich_with_fantasypros(
+        candidates,
+        season=2026,
+        league_info=profile["leagueSettings"],
+        provider=provider,
+    )
+
+    assert provider.calls[0][1] == {
+        "year": 2026,
+        "week": 0,
+        "projection_scoring": "PPR",
+    }
+    assert merged[0]["projected_points"] == 247.5
+    assert merged[0]["projected_opportunities"] == 260.25
+    assert merged[0]["average_draft_position"] == 18.0
+    assert "experience_years" not in merged[0]
+    assert "breakout" not in repr(merged[0]).casefold()
+    assert summary["projectionScoring"] == {
+        "value": "PPR",
+        "source": "leagueSettings.scoringFormat",
+        "defaulted": False,
+    }
+    assert summary["projectionEvidence"]["experienceYearsAvailable"] is False
+    assert summary["projectionEvidence"]["returnedCount"] == 500
+    assert summary["projectionEvidence"]["reportedCount"] == 650
+    assert summary["projectionEvidence"]["reportedLimit"] == 500
+    assert summary["projectionEvidence"]["publicApiLimited"] is True
+    assert summary["adpEvidence"]["publicApiLimited"] is True
+    assert "must not escape" not in repr(summary)
+    assert warnings == []
+
+
+@pytest.mark.asyncio
+async def test_fantasypros_enrichment_has_a_bounded_outer_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class BlockingProvider:
+        cancelled = False
+
+        async def get_player_updates(self, players, **arguments):
+            del players, arguments
+            try:
+                await asyncio.Future()
+            except asyncio.CancelledError:
+                self.cancelled = True
+                raise
+
+    provider = BlockingProvider()
+    monkeypatch.setattr(
+        recommendation_service,
+        "_FANTASYPROS_ENRICHMENT_TIMEOUT_SECONDS",
+        0.01,
+    )
+    source = [{"name": "Jordan Alpha", "position": "RB", "team": "SF", "rank": 1}]
+
+    merged, summary, warnings = await recommendation_service._enrich_with_fantasypros(
+        source,
+        season=2026,
+        league_info={"scoringFormat": "HALF"},
+        provider=provider,
+    )
+
+    assert provider.cancelled is True
+    assert merged == source
+    assert summary["status"] == "unavailable"
+    assert warnings == [
+        "FantasyPros evidence timed out; missing data remains unknown"
+    ]
 
 
 @pytest.mark.asyncio
@@ -286,7 +467,16 @@ async def test_local_profile_avoids_yahoo_and_adds_fantasypros_evidence(
     assert len(loads) == 2
     assert all(call[0] == live_context()["draft"] for call in loads)
     assert all(call[1] == profile_path for call in loads)
-    assert provider.calls[0][1] == {"year": 2026, "week": 0}
+    assert provider.calls[0][1] == {
+        "year": 2026,
+        "week": 0,
+        "projection_scoring": "HALF",
+    }
+    assert result["enrichment"]["projectionScoring"] == {
+        "value": "HALF",
+        "source": "default",
+        "defaulted": True,
+    }
     assert len(provider.calls[0][0]) == len(profile["rankings"])
     lamb = next(
         item for item in result["recommendations"] if item["player"]["name"] == "CeeDee Lamb"
@@ -858,6 +1048,14 @@ async def test_service_combines_local_state_with_yahoo_rankings(tmp_path: Path) 
     path = tmp_path / "drafts.json"
     save_live_draft(live_context(), path)
     calls = []
+    provider = FakeFantasyProsProvider(
+        {
+            "status": "unavailable",
+            "provider": "FantasyPros",
+            "players": [],
+            "warnings": ["FantasyPros evidence is unavailable in this test"],
+        }
+    )
 
     async def call_tool(name: str, **arguments):
         calls.append((name, arguments))
@@ -866,7 +1064,7 @@ async def test_service_combines_local_state_with_yahoo_rankings(tmp_path: Path) 
         if name == "ff_get_league_info":
             return {
                 "teams": 4,
-                "season": 2026,
+                "season": "2026",
                 "scoring_type": "head",
                 "roster_positions": [{"position": "QB", "count": 1}],
             }
@@ -880,6 +1078,7 @@ async def test_service_combines_local_state_with_yahoo_rankings(tmp_path: Path) 
         ranking_count=200,
         simulations=32,
         store_path=path,
+        fantasypros_provider=provider,
     )
 
     assert result["status"] == "degraded"
@@ -892,6 +1091,12 @@ async def test_service_combines_local_state_with_yahoo_rankings(tmp_path: Path) 
     assert result["marketSignals"]["source"]["name"] == "Yahoo pre-draft rankings"
     assert result["marketSignals"]["source"]["season"] == 2026
     assert result["marketSignals"]["source"]["asOfBasis"] == "retrieved"
+    assert provider.calls[0][1]["year"] == 2026
+    assert result["enrichment"]["seasonProvenance"] == {
+        "value": 2026,
+        "source": "yahooLeagueInfo.season",
+        "defaulted": False,
+    }
 
 
 @pytest.mark.asyncio

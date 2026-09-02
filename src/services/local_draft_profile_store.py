@@ -114,7 +114,11 @@ _SCORING_ALIASES = {
     "BN": "BN",
     "BE": "BN",
     "IR": "IR",
+    "RECEPTION": "receptions",
+    "RECEPTIONS": "receptions",
+    "POINTSPERRECEPTION": "receptions",
 }
+_SCORING_FORMATS = {"STD", "HALF", "PPR"}
 _PRIVATE_PLAYER_TEXT = re.compile(
     r"(?:[a-z][a-z0-9+.-]{1,15}://|www\.|"
     r"\b(?:[a-z0-9-]+\.)+(?:com|net|org|io|co|dev|app|test)(?:[/:?#]|$)|"
@@ -429,7 +433,7 @@ def _sanitize_league_settings(value: Any) -> dict[str, Any]:
         )
     if sum(positions.values()) > 40:
         raise LocalDraftProfileValidationError("roster cannot exceed 40 slots")
-    return {
+    result = {
         "teams": teams,
         "rosterPositions": [
             {"position": position, "count": positions[position]}
@@ -437,6 +441,14 @@ def _sanitize_league_settings(value: Any) -> dict[str, Any]:
             if position in positions
         ],
     }
+    if "scoringFormat" in value:
+        scoring_format = value["scoringFormat"]
+        if scoring_format not in _SCORING_FORMATS:
+            raise LocalDraftProfileValidationError(
+                "leagueSettings.scoringFormat must be STD, HALF, or PPR"
+            )
+        result["scoringFormat"] = scoring_format
+    return result
 
 
 def _sanitize_provenance(value: Any, season: int) -> dict[str, str]:
@@ -1103,8 +1115,30 @@ def _scoring_name(value: Any) -> str | None:
     return _SCORING_ALIASES.get(_header_key(value))
 
 
-def _merge_scoring_value(settings: dict[str, int], name: str, value: Any, row_number: int) -> None:
+def _merge_scoring_value(
+    settings: dict[str, Any], name: str, value: Any, row_number: int
+) -> None:
     if _is_blank(value):
+        return
+    if name == "receptions":
+        receptions = _coerce_number(
+            value,
+            f"Scoring row {row_number} receptions",
+            0.0,
+            1.0,
+        )
+        formats = {0.0: "STD", 0.5: "HALF", 1.0: "PPR"}
+        scoring_format = formats.get(receptions)
+        if scoring_format is None:
+            raise LocalDraftProfileValidationError(
+                f"Scoring row {row_number} receptions must be 0, 0.5, or 1"
+            )
+        existing = settings.get("scoringFormat")
+        if existing is not None and existing != scoring_format:
+            raise LocalDraftProfileValidationError(
+                "DraftSheets Scoring has conflicting receptions values"
+            )
+        settings["scoringFormat"] = scoring_format
         return
     maximum = 20 if name == "teams" else 30
     minimum = 2 if name == "teams" else 0
@@ -1133,7 +1167,7 @@ def _convert_scoring_rows(
     if any(not isinstance(row, Mapping) for row in rows):
         raise LocalDraftProfileValidationError("each DraftSheets Scoring row must be an object")
 
-    settings: dict[str, int] = {}
+    settings: dict[str, Any] = {}
     grid_value_cells = {
         (index + 1, column)
         for index, row in enumerate(rows[:-1])
@@ -1180,7 +1214,10 @@ def _convert_scoring_rows(
     ]
     if not positions:
         raise LocalDraftProfileValidationError("DraftSheets Scoring must include roster positions")
-    return {"teams": teams, "rosterPositions": positions}
+    result = {"teams": teams, "rosterPositions": positions}
+    if "scoringFormat" in settings:
+        result["scoringFormat"] = settings["scoringFormat"]
+    return result
 
 
 def profile_from_draftsheets_rows(
@@ -1447,6 +1484,11 @@ def profile_from_draftsheets_xlsx(
             profile["leagueSettings"] = _sanitize_league_settings(
                 {
                     "teams": profile["leagueSettings"]["teams"],
+                    **(
+                        {"scoringFormat": profile["leagueSettings"]["scoringFormat"]}
+                        if "scoringFormat" in profile["leagueSettings"]
+                        else {}
+                    ),
                     "rosterPositions": [
                         {"position": position, "count": positions[position]}
                         for position in _ROSTER_ORDER
