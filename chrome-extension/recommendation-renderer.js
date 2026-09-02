@@ -154,6 +154,29 @@
     if (recommendation.valueLabel) {
       card.appendChild(element(documentRef, 'p', 'value-label', recommendation.valueLabel));
     }
+    if (recommendation.projectionLabel) {
+      const projection = element(documentRef, 'section', 'projection-evidence');
+      projection.setAttribute('aria-label', 'FantasyPros projection evidence');
+      projection.appendChild(element(
+        documentRef,
+        'strong',
+        'projection-label',
+        recommendation.projectionLabel,
+      ));
+      projection.appendChild(element(
+        documentRef,
+        'p',
+        'projection-detail',
+        recommendation.projectionDetail,
+      ));
+      projection.appendChild(element(
+        documentRef,
+        'p',
+        'projection-caution',
+        recommendation.projectionCaution,
+      ));
+      card.appendChild(projection);
+    }
     if (recommendation.breakoutLabel) {
       const breakout = element(documentRef, 'section', 'breakout-watch');
       breakout.setAttribute('aria-label', 'Breakout Watch evidence');

@@ -25,6 +25,7 @@ from src.agents.breakout_watch import evaluate_breakout_watch
 from src.agents.draft_market_signals import build_market_decision_payload
 from src.agents.next_two_picks_planner import plan_next_two_picks
 from src.services.yahoo_player_identity import normalize_yahoo_player_key
+
 _POSITION_ALIASES = {
     "DEF": "DST",
     "D/ST": "DST",
@@ -156,6 +157,79 @@ def _optional_positive_number(value: Any) -> float | None:
     except (TypeError, ValueError):
         return None
     return result if math.isfinite(result) and result > 0 else None
+
+
+def _bounded_nonnegative_number(value: Any, maximum: float) -> float | None:
+    if type(value) not in (int, float):
+        return None
+    result = float(value)
+    return result if math.isfinite(result) and 0 <= result <= maximum else None
+
+
+def _safe_evidence_time(value: Any, *, optional: bool = False) -> tuple[bool, str | None]:
+    if value is None and optional:
+        return True, None
+    if (
+        not isinstance(value, str)
+        or not value
+        or len(value) > 40
+        or value != value.strip()
+        or re.search(r"[\x00-\x1f\x7f]", value)
+    ):
+        return False, None
+    if _parse_time(value) is None:
+        return False, None
+    return True, value
+
+
+def _fantasypros_projection_evidence(
+    value: Mapping[str, Any], position: str
+) -> dict[str, Any] | None:
+    """Allowlist display-only provider evidence without creating a breakout label."""
+
+    season = value.get("projection_season")
+    scoring = value.get("projection_scoring")
+    stale = value.get("projection_stale")
+    points = _bounded_nonnegative_number(value.get("projected_points"), 1_000.0)
+    opportunities = _bounded_nonnegative_number(
+        value.get("projected_opportunities"), 1_000.0
+    )
+    opportunity_kind = value.get("projection_opportunity_kind")
+    valid_kinds = {
+        "RB": {"touches"},
+        "WR": {"targets", "receptions"},
+        "TE": {"targets", "receptions"},
+    }
+    fetched_valid, fetched_at = _safe_evidence_time(
+        value.get("projection_fetched_at")
+    )
+    source_valid, source_as_of = _safe_evidence_time(
+        value.get("projection_source_as_of"), optional=True
+    )
+    if (
+        value.get("projection_source") != "FantasyPros"
+        or type(season) is not int
+        or not 2012 <= season <= 2100
+        or scoring not in {"STD", "HALF", "PPR"}
+        or type(stale) is not bool
+        or points is None
+        or opportunities is None
+        or opportunity_kind not in valid_kinds.get(position, set())
+        or not fetched_valid
+        or not source_valid
+    ):
+        return None
+    return {
+        "source": "FantasyPros",
+        "season": season,
+        "scoring": scoring,
+        "sourceAsOf": source_as_of,
+        "fetchedAt": fetched_at,
+        "stale": stale,
+        "projectedPoints": points,
+        "projectedOpportunities": opportunities,
+        "opportunityKind": opportunity_kind,
+    }
 
 
 def _position(value: Any) -> str:
@@ -1047,6 +1121,11 @@ class LiveDraftRecommendationEngine:
             }
             if isinstance(breakout_label, Mapping):
                 evaluated_candidate["breakoutWatch"] = dict(breakout_label)
+            projection_evidence = _fantasypros_projection_evidence(
+                candidate.raw, candidate.position
+            )
+            if projection_evidence is not None:
+                evaluated_candidate["projectionEvidence"] = projection_evidence
             evaluated.append(evaluated_candidate)
 
         evaluated, base["marketSignals"] = build_market_decision_payload(

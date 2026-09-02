@@ -604,6 +604,103 @@ def test_missing_breakout_evidence_is_explained_without_degrading_recommendation
     assert "projection" in result["cockpit"]["breakoutWatch"]["message"].lower()
 
 
+def test_fantasypros_projection_evidence_is_output_only_and_strictly_allowlisted() -> None:
+    source = rankings()
+    target = next(item for item in source if item["name"] == "CeeDee Lamb")
+    target.update(
+        {
+            "projected_points": 294.5,
+            "projected_opportunities": 124.25,
+            "projection_opportunity_kind": "receptions",
+            "projection_source": "FantasyPros",
+            "projection_season": 2026,
+            "projection_scoring": "PPR",
+            "projection_source_as_of": None,
+            "projection_fetched_at": "2026-08-28T16:00:00Z",
+            "projection_stale": False,
+            "projection_url": "https://evil.test/?token=secret",
+            "projection_raw_payload": {"manager": "private"},
+        }
+    )
+    now = datetime(2026, 9, 1, tzinfo=timezone.utc)
+    baseline = LiveDraftRecommendationEngine(simulations=0).recommend(
+        live_context(), rankings(), {"teams": 4}, count=5, now=now
+    )
+    enriched = LiveDraftRecommendationEngine(simulations=0).recommend(
+        live_context(), source, {"teams": 4}, count=5, now=now
+    )
+
+    assert [item["player"]["name"] for item in enriched["recommendations"]] == [
+        item["player"]["name"] for item in baseline["recommendations"]
+    ]
+    assert [item["overallScore"] for item in enriched["recommendations"]] == [
+        item["overallScore"] for item in baseline["recommendations"]
+    ]
+    candidate = next(
+        item for item in enriched["recommendations"] if item["player"]["name"] == "CeeDee Lamb"
+    )
+    assert candidate["projectionEvidence"] == {
+        "source": "FantasyPros",
+        "season": 2026,
+        "scoring": "PPR",
+        "sourceAsOf": None,
+        "fetchedAt": "2026-08-28T16:00:00Z",
+        "stale": False,
+        "projectedPoints": 294.5,
+        "projectedOpportunities": 124.25,
+        "opportunityKind": "receptions",
+    }
+    assert "breakoutWatch" not in candidate
+    assert "evil.test" not in repr(candidate)
+    assert "private" not in repr(candidate)
+
+
+@pytest.mark.parametrize(
+    ("override",),
+    [
+        ({"projection_source": "https://evil.test/?token=secret"},),
+        ({"projection_season": True},),
+        ({"projection_scoring": "CUSTOM"},),
+        ({"projection_fetched_at": "not-a-timestamp"},),
+        ({"projection_stale": "false"},),
+        ({"projected_opportunities": float("inf")},),
+        ({"projection_opportunity_kind": "touches"},),
+    ],
+)
+def test_malformed_fantasypros_projection_evidence_is_omitted(
+    override: dict,
+) -> None:
+    source = rankings()
+    target = next(item for item in source if item["name"] == "CeeDee Lamb")
+    target.update(
+        {
+            "projected_points": 294.5,
+            "projected_opportunities": 124.25,
+            "projection_opportunity_kind": "receptions",
+            "projection_source": "FantasyPros",
+            "projection_season": 2026,
+            "projection_scoring": "PPR",
+            "projection_source_as_of": None,
+            "projection_fetched_at": "2026-08-28T16:00:00Z",
+            "projection_stale": False,
+            **override,
+        }
+    )
+
+    result = LiveDraftRecommendationEngine(simulations=0).recommend(
+        live_context(),
+        source,
+        {"teams": 4},
+        count=5,
+        now=datetime(2026, 9, 1, tzinfo=timezone.utc),
+    )
+
+    candidate = next(
+        item for item in result["recommendations"] if item["player"]["name"] == "CeeDee Lamb"
+    )
+    assert "projectionEvidence" not in candidate
+
+
 def test_breakout_classification_stays_stable_as_the_ledger_advances() -> None:
     candidates = rankings()
     candidates.extend(

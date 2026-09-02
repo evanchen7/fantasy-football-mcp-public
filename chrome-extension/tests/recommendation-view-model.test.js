@@ -223,6 +223,50 @@ test('shows Breakout Watch only for complete explicit uncalibrated evidence', ()
   assert.equal(wrongOpportunityKind.recommendations[0].breakoutLabel, '');
 });
 
+test('shows allowlisted FantasyPros projections as evidence, never as Breakout Watch', () => {
+  const projectionEvidence = {
+    source: 'FantasyPros',
+    season: 2026,
+    scoring: 'PPR',
+    sourceAsOf: null,
+    fetchedAt: '2026-08-28T16:00:00Z',
+    stale: false,
+    projectedPoints: 294.5,
+    projectedOpportunities: 124.25,
+    opportunityKind: 'receptions',
+    rawUrl: 'https://evil.test/?token=secret',
+  };
+  const model = createRecommendationViewModel(response({
+    capabilities: { injuryStatus: false, externalNews: false, breakoutWatch: false },
+    recommendations: [candidate(1, { projectionEvidence })],
+  }), { leagueId: '10462193' });
+
+  assert.equal(model.recommendations[0].projectionLabel, 'FantasyPros projection evidence');
+  assert.equal(
+    model.recommendations[0].projectionDetail,
+    '2026 PPR · 294.5 projected points · 124.25 receptions · fetched 2026-08-28T16:00:00Z · fresh cached snapshot',
+  );
+  assert.match(model.recommendations[0].projectionCaution, /does not create a Breakout Watch label/i);
+  assert.equal(model.recommendations[0].breakoutLabel, '');
+  assert.doesNotMatch(JSON.stringify(model.recommendations[0]), /evil\.test|secret/);
+
+  const malformed = [
+    { ...projectionEvidence, source: 'FantasyPros <script>' },
+    { ...projectionEvidence, season: true },
+    { ...projectionEvidence, scoring: 'CUSTOM' },
+    { ...projectionEvidence, fetchedAt: 'https://evil.test/?token=secret' },
+    { ...projectionEvidence, stale: 'false' },
+    { ...projectionEvidence, projectedPoints: Infinity },
+    { ...projectionEvidence, opportunityKind: 'touches' },
+  ];
+  for (const value of malformed) {
+    const invalid = createRecommendationViewModel(response({
+      recommendations: [candidate(1, { projectionEvidence: value })],
+    }), { leagueId: '10462193' });
+    assert.equal(invalid.recommendations[0].projectionLabel, '');
+  }
+});
+
 test('explains unavailable breakout evidence without degrading ordinary recommendations', () => {
   const model = createRecommendationViewModel(response({
     cockpit: {

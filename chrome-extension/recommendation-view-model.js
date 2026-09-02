@@ -126,6 +126,54 @@
     };
   }
 
+  function fantasyProsProjection(rawProjection, playerPosition) {
+    if (
+      !rawProjection ||
+      typeof rawProjection !== 'object' ||
+      Array.isArray(rawProjection) ||
+      rawProjection.source !== 'FantasyPros' ||
+      !Number.isInteger(rawProjection.season) ||
+      rawProjection.season < 2012 ||
+      rawProjection.season > 2100 ||
+      !['STD', 'HALF', 'PPR'].includes(rawProjection.scoring) ||
+      typeof rawProjection.stale !== 'boolean'
+    ) return null;
+    const projectedPoints = finiteNumber(rawProjection.projectedPoints);
+    const projectedOpportunities = finiteNumber(rawProjection.projectedOpportunities);
+    const opportunityKind = safeText(rawProjection.opportunityKind, 20).toLowerCase();
+    const fetchedAt = isoTimestamp(rawProjection.fetchedAt);
+    const suppliedSourceAsOf = rawProjection.sourceAsOf;
+    const sourceAsOf = suppliedSourceAsOf === null || suppliedSourceAsOf === undefined
+      ? ''
+      : isoTimestamp(suppliedSourceAsOf);
+    const validKinds = BREAKOUT_KINDS_BY_POSITION[playerPosition];
+    if (
+      projectedPoints === null || projectedPoints < 0 || projectedPoints > 1_000 ||
+      projectedOpportunities === null || projectedOpportunities < 0 || projectedOpportunities > 1_000 ||
+      !validKinds?.has(opportunityKind) ||
+      !fetchedAt ||
+      (suppliedSourceAsOf !== null && suppliedSourceAsOf !== undefined && !sourceAsOf)
+    ) return null;
+    const timing = [
+      sourceAsOf ? `source as of ${sourceAsOf}` : '',
+      `fetched ${fetchedAt}`,
+    ].filter(Boolean);
+    return {
+      label: 'FantasyPros projection evidence',
+      detail: [
+        `${rawProjection.season} ${rawProjection.scoring}`,
+        `${displayNumber(projectedPoints)} projected points`,
+        `${displayNumber(projectedOpportunities)} ${opportunityKind}`,
+        ...timing,
+        rawProjection.stale ? 'stale cached snapshot' : 'fresh cached snapshot',
+      ].join(' · '),
+      caution: (
+        'Projection evidence only; FantasyPros does not supply experience years, so this ' +
+        'evidence alone does not create a Breakout Watch label.'
+      ),
+    };
+  }
+
   function plannedPlayer(rawPlayer) {
     if (!rawPlayer || typeof rawPlayer !== 'object' || Array.isArray(rawPlayer)) return null;
     const name = safeText(rawPlayer.name, 120);
@@ -654,6 +702,7 @@
       options.breakoutEvidenceAvailable,
       playerPosition,
     );
+    const projection = fantasyProsProjection(item?.projectionEvidence, playerPosition);
     return {
       rankLabel: String(index + 1),
       name: safeText(item?.player?.name, 120, 'Unknown player'),
@@ -676,6 +725,9 @@
       breakoutLabel: breakout?.label || '',
       breakoutDetail: breakout?.detail || '',
       breakoutMethod: breakout?.method || '',
+      projectionLabel: projection?.label || '',
+      projectionDetail: projection?.detail || '',
+      projectionCaution: projection?.caution || '',
       reasoning: uniqueStrings(Array.isArray(item?.reasoning) ? item.reasoning : [], 6),
       badges: marketBadges(item?.decisionSignals?.badges),
       actionLabel: action?.label || '',

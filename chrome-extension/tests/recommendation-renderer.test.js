@@ -83,6 +83,9 @@ test('renders all server-provided content as inert text with accessible structur
       breakoutLabel: 'Breakout Watch · uncalibrated',
       breakoutDetail: 'Example Projections · as of 2026-08-20 · 210 projected points · 125 targets · year 2',
       breakoutMethod: malicious,
+      projectionLabel: 'FantasyPros projection evidence',
+      projectionDetail: '2026 PPR · 294.5 projected points · 124.25 receptions · fresh cached snapshot',
+      projectionCaution: 'Projection evidence only; FantasyPros does not supply experience years, so this evidence alone does not create a Breakout Watch label.',
       reasoning: [malicious],
     }],
     contingency: ['If unavailable: Player 2'],
@@ -102,6 +105,10 @@ test('renders all server-provided content as inert text with accessible structur
   assert.match(root.textContent, /Next two selections/);
   assert.match(root.textContent, /uncalibrated heuristic/);
   assert.match(root.textContent, /Breakout Watch · uncalibrated/);
+  assert.match(root.textContent, /FantasyPros projection evidence/);
+  assert.equal(findAll(root, (node) => (
+    node.attributes['aria-label'] === 'FantasyPros projection evidence'
+  )).length, 1);
   assert.match(root.textContent, /Breakout evidence is unavailable/);
 });
 

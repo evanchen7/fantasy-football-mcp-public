@@ -168,6 +168,10 @@ dd { margin-top: 3px; font-size: 12px; font-weight: 700; overflow-wrap: anywhere
 .player-meta { margin-top: 2px; color: #6b7771; font-size: 10px; }
 .score { color: #345c46; font-size: 11px; }
 .value-label { margin-top: 8px; color: #526059; font-size: 10px; line-height: 1.35; }
+.projection-evidence { margin-top: 9px; padding: 8px; border: 1px solid #d5c2e0; border-radius: 8px; background: #faf7fc; }
+.projection-label { color: #5f1a8b; font-size: 10px; }
+.projection-detail, .projection-caution { margin-top: 3px; color: #526059; font-size: 9px; line-height: 1.4; overflow-wrap: anywhere; }
+.projection-caution { color: #6b7771; }
 .breakout-watch { margin-top: 9px; padding: 8px; border: 1px solid #b9cfbf; border-radius: 8px; background: #f3faf5; }
 .breakout-label { color: #276c45; font-size: 10px; }
 .breakout-detail, .breakout-method { margin-top: 3px; color: #526059; font-size: 9px; line-height: 1.4; overflow-wrap: anywhere; }

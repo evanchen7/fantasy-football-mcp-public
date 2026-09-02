@@ -230,6 +230,334 @@ def test_fantasypros_merge_preserves_local_breakout_evidence() -> None:
     assert merged[0]["injury_status"] == "unknown"
 
 
+def test_fantasypros_adp_market_source_uses_fresh_exact_provider_provenance() -> None:
+    fetched_at = "2026-08-28T16:00:00Z"
+    source = [{"name": "Young Receiver", "position": "WR", "team": "SEA", "rank": 1}]
+    enriched = [
+        {
+            **source[0],
+            "identityResolved": True,
+            "average_draft_position": 84.0,
+            "adp_source": "FantasyPros",
+            "adp_season": 2026,
+            "adp_scoring": "PPR",
+            "adp_source_as_of": None,
+            "adp_fetched_at": fetched_at,
+            "adp_stale": False,
+        }
+    ]
+    summary = {
+        "adpPlayers": 1,
+        "importedAdpPlayers": 0,
+        "adpEvidence": {
+            "status": "available",
+            "reason": None,
+            "source": "FantasyPros",
+            "season": 2026,
+            "scoring": "PPR",
+            "sourceAsOf": None,
+            "fetchedAt": fetched_at,
+            "stale": False,
+            "refreshFailed": False,
+            "availablePlayers": 500,
+            "publicApiLimited": True,
+        },
+    }
+
+    for scoring in ("STD", "HALF", "PPR"):
+        scored_enriched = [{**enriched[0], "adp_scoring": scoring}]
+        scored_summary = {
+            **summary,
+            "adpEvidence": {**summary["adpEvidence"], "scoring": scoring},
+        }
+        assert recommendation_service._fantasypros_market_source(
+            source,
+            scored_enriched,
+            scored_summary,
+            season=2026,
+            scoring=scoring,
+        ) == {
+            "name": "FantasyPros",
+            "season": 2026,
+            "asOf": fetched_at,
+            "asOfBasis": "retrieved",
+        }
+
+
+def test_fantasypros_adp_market_source_fails_closed_for_mixed_or_untrusted_data() -> None:
+    fetched_at = "2026-08-28T16:00:00Z"
+    source = [{"name": "Young Receiver", "position": "WR", "team": "SEA", "rank": 1}]
+    enriched = [
+        {
+            **source[0],
+            "identityResolved": True,
+            "average_draft_position": 84.0,
+            "adp_source": "FantasyPros",
+            "adp_season": 2026,
+            "adp_scoring": "PPR",
+            "adp_source_as_of": None,
+            "adp_fetched_at": fetched_at,
+            "adp_stale": False,
+        }
+    ]
+    evidence = {
+        "status": "available",
+        "reason": None,
+        "source": "FantasyPros",
+        "season": 2026,
+        "scoring": "PPR",
+        "sourceAsOf": None,
+        "fetchedAt": fetched_at,
+        "stale": False,
+        "refreshFailed": False,
+        "availablePlayers": 500,
+        "publicApiLimited": False,
+    }
+    base_summary = {
+        "adpPlayers": 1,
+        "importedAdpPlayers": 0,
+        "adpEvidence": evidence,
+    }
+    cases = [
+        (
+            [{**source[0], "average_draft_position": 90.0}],
+            enriched,
+            base_summary,
+            2026,
+            "PPR",
+        ),
+        (source, enriched, {**base_summary, "adpEvidence": {**evidence, "stale": True}}, 2026, "PPR"),
+        (source, enriched, {**base_summary, "adpEvidence": {**evidence, "season": 2025}}, 2026, "PPR"),
+        (source, enriched, {**base_summary, "adpEvidence": {**evidence, "fetchedAt": "https://evil.test/?token=secret"}}, 2026, "PPR"),
+        (
+            source,
+            enriched,
+            {
+                **base_summary,
+                "adpEvidence": {
+                    **evidence,
+                    "status": "unavailable",
+                    "reason": "half_ppr_adp_unavailable",
+                    "scoring": "HALF",
+                },
+            },
+            2026,
+            "HALF",
+        ),
+        (source, [{**enriched[0], "identityResolved": False}], base_summary, 2026, "PPR"),
+        (source, [{**enriched[0], "adp_season": 2025}], base_summary, 2026, "PPR"),
+    ]
+
+    for original, merged, summary, season, scoring in cases:
+        assert recommendation_service._fantasypros_market_source(
+            original,
+            merged,
+            summary,
+            season=season,
+            scoring=scoring,
+        ) is None
+
+
+def test_fantasypros_merge_never_mixes_imported_and_provider_adp() -> None:
+    rankings_with_one_imported_adp = [
+        {
+            "name": "Imported ADP",
+            "position": "WR",
+            "team": "SEA",
+            "rank": 1,
+            "average_draft_position": 50.0,
+        },
+        {"name": "No ADP", "position": "RB", "team": "DEN", "rank": 2},
+    ]
+    provider_result = {
+        "status": "success",
+        "players": [
+            {
+                "name": "Imported ADP",
+                "position": "WR",
+                "team": "SEA",
+                "identityResolved": True,
+                "average_draft_position": 51.0,
+            },
+            {
+                "name": "No ADP",
+                "position": "RB",
+                "team": "DEN",
+                "identityResolved": True,
+                "average_draft_position": 80.0,
+            },
+        ],
+    }
+
+    merged, summary = recommendation_service._merge_fantasypros_updates(
+        rankings_with_one_imported_adp,
+        provider_result,
+    )
+
+    assert merged[0]["average_draft_position"] == 50.0
+    assert "average_draft_position" not in merged[1]
+    assert summary["importedAdpPlayers"] == 1
+    assert summary["adpPlayers"] == 0
+
+
+@pytest.mark.asyncio
+async def test_stale_provider_adp_is_removed_before_scoring_or_market_signals(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "drafts.json"
+    save_live_draft(live_context(), path)
+    profile = local_profile()
+    profile["leagueSettings"]["scoringFormat"] = "PPR"
+    for player in profile["rankings"]:
+        player.pop("average_draft_position", None)
+    monkeypatch.setattr(
+        recommendation_service,
+        "load_local_draft_profile",
+        lambda identity, path=None: deepcopy(profile),
+    )
+    raw = fantasypros_result(profile)
+    fetched_at = "2026-08-28T16:00:00Z"
+    for index, update in enumerate(raw["players"], start=1):
+        update.update(
+            {
+                "injury_status": "unknown",
+                "injury_source": None,
+                "injury_updated_at": None,
+                "injury_fresh": False,
+                "news_source": None,
+                "news_updated_at": None,
+                "news_fresh": False,
+                "recentNews": [],
+                "average_draft_position": float(500 - index),
+                "adp_source": "FantasyPros",
+                "adp_season": 2026,
+                "adp_scoring": "PPR",
+                "adp_source_as_of": None,
+                "adp_fetched_at": fetched_at,
+                "adp_stale": True,
+            }
+        )
+    raw["adpEvidence"] = {
+        "status": "stale",
+        "reason": None,
+        "source": "FantasyPros",
+        "season": 2026,
+        "scoring": "PPR",
+        "sourceAsOf": None,
+        "fetchedAt": fetched_at,
+        "stale": True,
+        "refreshFailed": True,
+        "availablePlayers": len(raw["players"]),
+        "publicApiLimited": False,
+    }
+
+    async def no_yahoo(name: str, **arguments):
+        raise AssertionError(f"Yahoo must not be called: {name} {arguments}")
+
+    result = await get_live_draft_recommendation(
+        no_yahoo,
+        league_key=None,
+        league_id="10462193",
+        count=5,
+        simulations=0,
+        store_path=path,
+        profile_path=tmp_path / "profiles.json",
+        fantasypros_provider=FakeFantasyProsProvider(raw),
+    )
+    expected = LiveDraftRecommendationEngine(simulations=0).recommend(
+        live_context(),
+        profile["rankings"],
+        profile["leagueSettings"],
+        count=5,
+    )
+
+    assert [item["player"]["name"] for item in result["recommendations"]] == [
+        item["player"]["name"] for item in expected["recommendations"]
+    ]
+    assert [item["overallScore"] for item in result["recommendations"]] == [
+        item["overallScore"] for item in expected["recommendations"]
+    ]
+    assert all(
+        item["player"]["adpAvailable"] is False
+        for item in result["recommendations"]
+    )
+    assert result["marketSignals"]["status"] == "unavailable"
+
+
+@pytest.mark.asyncio
+async def test_service_uses_fantasypros_market_source_for_exclusive_fresh_adp(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "drafts.json"
+    save_live_draft(live_context(), path)
+    profile = local_profile()
+    profile["leagueSettings"]["scoringFormat"] = "PPR"
+    for player in profile["rankings"]:
+        player.pop("average_draft_position", None)
+    monkeypatch.setattr(
+        recommendation_service,
+        "load_local_draft_profile",
+        lambda identity, path=None: deepcopy(profile),
+    )
+    raw = fantasypros_result(profile)
+    fetched_at = "2026-08-28T16:00:00Z"
+    for index, update in enumerate(raw["players"], start=1):
+        update.update(
+            {
+                "average_draft_position": float(70 + index),
+                "adp_source": "FantasyPros",
+                "adp_season": 2026,
+                "adp_scoring": "PPR",
+                "adp_source_as_of": None,
+                "adp_fetched_at": fetched_at,
+                "adp_stale": False,
+            }
+        )
+    raw["adpEvidence"] = {
+        "status": "available",
+        "reason": None,
+        "source": "FantasyPros",
+        "season": 2026,
+        "scoring": "PPR",
+        "sourceAsOf": None,
+        "fetchedAt": fetched_at,
+        "stale": False,
+        "refreshFailed": False,
+        "availablePlayers": 500,
+        "publicApiLimited": True,
+    }
+
+    async def no_yahoo(name: str, **arguments):
+        raise AssertionError(f"Yahoo must not be called: {name} {arguments}")
+
+    result = await get_live_draft_recommendation(
+        no_yahoo,
+        league_key=None,
+        league_id="10462193",
+        count=5,
+        simulations=0,
+        store_path=path,
+        profile_path=tmp_path / "profiles.json",
+        fantasypros_provider=FakeFantasyProsProvider(raw),
+    )
+
+    assert result["marketSignals"]["status"] == "available"
+    assert result["marketSignals"]["source"] == {
+        "name": "FantasyPros",
+        "season": 2026,
+        "targetSeason": 2026,
+        "sameSeason": True,
+        "asOf": fetched_at,
+        "asOfBasis": "retrieved",
+    }
+    assert all(
+        item["player"]["adpAvailable"] is True for item in result["recommendations"]
+    )
+    assert result["enrichment"]["adpEvidence"]["publicApiLimited"] is True
+
+
 @pytest.mark.parametrize(
     ("settings", "expected"),
     [
@@ -338,7 +666,8 @@ async def test_enrichment_exposes_projection_and_adp_evidence_without_breakout_c
     provider = FakeFantasyProsProvider(raw)
 
     candidates = [dict(item) for item in profile["rankings"]]
-    candidates[0].pop("average_draft_position", None)
+    for candidate in candidates:
+        candidate.pop("average_draft_position", None)
     merged, summary, warnings = await recommendation_service._enrich_with_fantasypros(
         candidates,
         season=2026,
