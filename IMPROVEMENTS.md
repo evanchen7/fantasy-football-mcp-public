@@ -10,7 +10,7 @@ This list separates the delivered live-draft baseline from prioritized follow-up
 - League-specific state validation and rollback-resistant private persistence.
 - Deterministic value, roster, dynamics, opponent, risk/news, scenario, and critic specialists.
 - Yahoo roster-slot support, including Superflex aliases.
-- Conservative player resolution, stale-state warnings, and incomplete-ledger blocking.
+- Conservative player resolution with explicit equivalent NFL team-code aliases, stale-state warnings, and incomplete-ledger blocking.
 - Popup ledger diagnostics with exact missing, duplicate, and sanitized unnumbered-pick details, plus guarded authoritative full repair.
 - Per-league browser storage, durable repair/reset reconciliation, and a cross-browser extension-background lock broker with bounded heartbeats, expiring session fences, and cooperative lease cancellation instead of Firefox content-script Web Locks.
 - Persistent Firefox Draft Assistant sidebar with explicit league selection, shared fail-closed recommendation components, and no Yahoo-page injection or draft actions.

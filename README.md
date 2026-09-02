@@ -132,7 +132,7 @@ Before importing, check the team count and roster slots shown in the form. The s
 
 Google Drive is optional storage only; this app does not read Drive or Google Sheets at runtime. Download the sheet to your computer as `.xlsx` or export its ECR tab as CSV, then choose that local file in the dashboard.
 
-A matching local profile provides rankings and league settings with zero Yahoo API calls. Drafted players still come from the extension's live ledger.
+A matching local profile provides rankings and league settings with zero Yahoo API calls. Drafted players still come from the extension's live ledger. Yahoo's initialed player names are matched conservatively by name, position, and canonical NFL team; known equivalent provider codes such as Jacksonville's `JAX` and `JAC` are normalized before availability is decided.
 
 ### 7. Get recommendations
 
