@@ -1,6 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
+const { createRecommendationViewModel } = require('../recommendation-view-model.js');
 const { renderRecommendationView } = require('../recommendation-renderer.js');
 
 class FakeElement {
@@ -102,6 +103,137 @@ test('renders all server-provided content as inert text with accessible structur
   assert.match(root.textContent, /uncalibrated heuristic/);
   assert.match(root.textContent, /Breakout Watch · uncalibrated/);
   assert.match(root.textContent, /Breakout evidence is unavailable/);
+});
+
+test('normalizes and renders market signals, two-pick plan, and breakout notice together', () => {
+  const breakoutNotice = 'Breakout evidence is unavailable for this ranking profile.';
+  const recommendation = {
+    player: {
+      name: 'Integrated Target',
+      position: 'WR',
+      team: 'SEA',
+      rank: 7,
+      adp: null,
+      adpAvailable: false,
+    },
+    overallScore: 91.5,
+    confidence: 0.82,
+    confidenceCalibrated: false,
+    returnProbability: 0.31,
+    rosterImpact: 'fills an unfilled WR starter or flex requirement',
+    reasoning: ['ADP is unavailable; rank fallback is used only for scoring.'],
+    risk: { status: 'unknown', fresh: false },
+    specialistDetails: {
+      scenario: { survivalProbability: 0.42, calibrated: false },
+      value: { tier: 'elite' },
+    },
+    decisionSignals: {
+      badges: [],
+      action: {
+        code: 'timing-unknown',
+        label: 'Timing unknown',
+        reason: 'Real ADP is unavailable.',
+        calibrated: false,
+      },
+      riskCaution: null,
+    },
+  };
+  const response = {
+    status: 'success',
+    leagueId: '10462193',
+    generatedAt: '2026-09-02T12:00:00Z',
+    state: {
+      currentOverallPick: 7,
+      nextUserPick: 11,
+      picksUntilUserTurn: 4,
+      teamCount: 4,
+      userRoster: [],
+      health: {
+        complete: true,
+        fresh: true,
+        teamCountSource: 'league',
+        stateAgeSeconds: 0,
+        missingPickNumbers: [],
+        duplicatePickNumbers: [],
+        unnumberedPickCount: 0,
+      },
+    },
+    capabilities: { injuryStatus: false, externalNews: false, breakoutWatch: false },
+    critic: { passed: true, checks: { allDraftedPlayersResolved: true } },
+    recommendations: [recommendation],
+    marketSignals: {
+      status: 'available',
+      calibrated: false,
+      method: 'Uncalibrated deterministic rank-versus-ADP market heuristic.',
+      message: 'The bounded market board is available.',
+      scope: 'Counts cover the supplied ranking rows only.',
+      source: {
+        name: 'Unit test rankings',
+        season: 2026,
+        targetSeason: 2026,
+        sameSeason: true,
+        asOf: '2026-09-01',
+        asOfBasis: 'source',
+      },
+      definitions: [{
+        code: 'value',
+        label: 'Value',
+        description: 'Current pick is at least one league round after real ADP.',
+      }],
+      trust: [{
+        code: 'ledger-complete',
+        passed: true,
+        message: 'Authoritative numbered ledger is complete.',
+      }],
+      exclusions: [{
+        code: 'no-real-adp',
+        count: 1,
+        message: '1 available ranking candidate has no real ADP.',
+      }],
+      sleeperWatch: [],
+    },
+    nextTwoPicksPlan: {
+      status: 'degraded',
+      method: 'Bounded deterministic candidate-pair scoring.',
+      probabilitiesCalibrated: false,
+      primaryNow: {
+        name: 'Integrated Target', position: 'WR', team: 'SEA', score: 91.5,
+      },
+      fallbacksNow: [],
+      nextUserPicks: [11, 14],
+      combinations: [],
+      uncertainties: ['Actual ADP is unavailable for the primary candidate.'],
+      summary: 'The immediate board is usable with limited future timing evidence.',
+    },
+    cockpit: {
+      breakoutWatch: {
+        status: 'unavailable',
+        calibrated: false,
+        message: breakoutNotice,
+      },
+    },
+    warnings: [],
+  };
+  const model = createRecommendationViewModel(response, { leagueId: '10462193' });
+  const root = new FakeElement('main');
+
+  assert.equal(model.marketSignals.status, 'available');
+  assert.equal(model.nextTwoPicksPlan.status, 'degraded');
+  assert.equal(model.breakoutEvidenceNotice, breakoutNotice);
+  renderRecommendationView(root, model, { document: fakeDocument });
+
+  assert.equal(findAll(root, (node) => (
+    node.className.split(' ').includes('market-signals')
+  )).length, 1);
+  assert.equal(findAll(root, (node) => (
+    node.className.split(' ').includes('two-pick-plan')
+  )).length, 1);
+  assert.equal(findAll(root, (node) => (
+    node.attributes['aria-label'] === 'Breakout evidence availability'
+  )).length, 1);
+  assert.match(root.textContent, /Sleeper Watch/);
+  assert.match(root.textContent, /Next two selections/);
+  assert.match(root.textContent, new RegExp(breakoutNotice));
 });
 
 test('renders exact blocker details and an empty-state instead of player cards', () => {

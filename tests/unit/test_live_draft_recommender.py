@@ -307,6 +307,102 @@ def test_candidate_output_distinguishes_missing_adp_from_rank_fallback() -> None
     brief = LiveDraftRecommendationEngine._candidate_brief(candidate)
     assert brief["adp"] is None
     assert brief["adpAvailable"] is False
+
+
+def test_primary_candidate_keeps_combined_draft_intelligence_contract() -> None:
+    target_evidence = {
+        "source": "Example Projections",
+        "as_of": "2026-08-20",
+        "projected_points": 300,
+        "projected_opportunities": 160,
+        "opportunity_kind": "targets",
+        "experience_years": 2,
+    }
+    supporting_candidates = [
+        {
+            "name": f"Evidence Receiver {index}",
+            "position": "WR",
+            "team": "BUF",
+            "rank": 40 + index,
+            "average_draft_position": 80 + index,
+            "breakout_evidence": {
+                "source": "Example Projections",
+                "as_of": "2026-08-20",
+                "projected_points": 100 + index * 20,
+                "projected_opportunities": 70 + index * 10,
+                "opportunity_kind": "targets",
+                "experience_years": 4,
+            },
+        }
+        for index in range(1, 5)
+    ]
+    target = {
+        "name": "Integrated Prospect",
+        "position": "WR",
+        "team": "SEA",
+        "rank": 7,
+        "player_key": "461.p.33536",
+        "breakout_evidence": target_evidence,
+    }
+
+    result = LiveDraftRecommendationEngine(simulations=0).recommend(
+        live_context(),
+        [*rankings()[:6], target, *supporting_candidates],
+        {"teams": 4},
+        count=10,
+        now=datetime(2026, 9, 2, tzinfo=timezone.utc),
+        market_source={
+            "name": "unit-test rankings",
+            "season": 2026,
+            "asOf": "2026-09-01",
+        },
+    )
+
+    primary = result["primaryRecommendation"]
+    assert primary == result["recommendations"][0]
+    assert primary["player"] == {
+        "name": "Integrated Prospect",
+        "position": "WR",
+        "team": "SEA",
+        "playerKey": "461.p.33536",
+        "rank": 7.0,
+        "adp": None,
+        "adpAvailable": False,
+        "byeWeek": None,
+    }
+    assert primary["specialistDetails"]["value"]["adp"] is None
+    assert primary["specialistDetails"]["value"]["adpAvailable"] is False
+    assert primary["specialistDetails"]["value"]["adpDelta"] is None
+    assert primary["breakoutWatch"] == {
+        "label": "Breakout Watch",
+        "method": (
+            "fresh same-source position cohort: projected points and projected "
+            "opportunities at or above the 60th percentile, with three or fewer "
+            "years of experience"
+        ),
+        "source": "Example Projections",
+        "asOf": "2026-08-20",
+        "projectedPoints": 300.0,
+        "projectedOpportunities": 160.0,
+        "opportunityKind": "targets",
+        "experienceYears": 2,
+        "pointsPercentile": 1.0,
+        "opportunityPercentile": 1.0,
+        "calibrated": False,
+    }
+    assert set(primary["decisionSignals"]) == {"badges", "action", "riskCaution"}
+    assert primary["decisionSignals"]["badges"] == []
+    assert primary["decisionSignals"]["action"]["code"] == "timing-unknown"
+    assert primary["decisionSignals"]["action"]["calibrated"] is False
+    assert result["marketSignals"]["status"] == "available"
+    assert result["nextTwoPicksPlan"]["primaryNow"] == {
+        "name": "Integrated Prospect",
+        "position": "WR",
+        "team": "SEA",
+        "score": primary["overallScore"],
+    }
+
+
 def test_recommender_normalizes_jaguars_team_alias_for_initialed_picks() -> None:
     context = live_context()
     context["picks"].extend(

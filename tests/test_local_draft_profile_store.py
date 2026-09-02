@@ -353,6 +353,40 @@ def test_saves_loads_exact_identity_and_isolates_leagues(tmp_path: Path) -> None
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
 
 
+def test_profile_storage_round_trip_keeps_player_key_and_breakout_evidence(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "private" / "draft-profiles.json"
+    profile = local_profile()
+    profile["rankings"][0]["breakout_evidence"] = {
+        "source": "Example Projections",
+        "as_of": "2026-08-20",
+        "projected_points": 285.25,
+        "projected_opportunities": 265,
+        "opportunity_kind": "touches",
+        "experience_years": 2,
+    }
+
+    saved = save_local_draft_profile(profile, path)
+    loaded = load_local_draft_profile(draft_identity(), path)
+
+    assert loaded == saved
+    assert {
+        "player_key": loaded["rankings"][0]["player_key"],
+        "breakout_evidence": loaded["rankings"][0]["breakout_evidence"],
+    } == {
+        "player_key": "461.p.33536",
+        "breakout_evidence": {
+            "source": "Example Projections",
+            "as_of": "2026-08-20",
+            "projected_points": 285.25,
+            "projected_opportunities": 265.0,
+            "opportunity_kind": "touches",
+            "experience_years": 2,
+        },
+    }
+
+
 def test_lists_privacy_minimal_profile_summaries(tmp_path: Path) -> None:
     path = tmp_path / "draft-profiles.json"
     save_local_draft_profile(local_profile("111", "3"), path)

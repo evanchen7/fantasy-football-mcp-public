@@ -217,6 +217,54 @@ test('preserves a strict complete breakout evidence object from JSON', () => {
   });
 });
 
+test('round-trips player key and breakout evidence together through the client request', async () => {
+  const expectedRanking = {
+    name: 'Young Receiver',
+    position: 'WR',
+    team: 'SEA',
+    rank: 1,
+    player_key: '461.p.33536',
+    breakout_evidence: {
+      source: 'Example Projections',
+      as_of: '2026-08-20',
+      projected_points: 210,
+      projected_opportunities: 125,
+      opportunity_kind: 'targets',
+      experience_years: 1,
+    },
+  };
+  const parsed = parseDraftProfileFile(JSON.stringify({
+    schemaVersion: 1,
+    rankings: [{
+      ...expectedRanking,
+      private_notes: 'must not leave the browser',
+    }],
+  }), 'profile.json');
+  let outboundRequest;
+
+  await saveDraftProfile({
+    ...parsed,
+    leagueId: '498589',
+    leagueSettings: {
+      teams: 12,
+      rosterPositions: [{ position: 'WR', count: 1 }],
+    },
+  }, {
+    now: new Date('2026-09-01T12:34:56Z'),
+    fetchImpl: async (_url, options) => {
+      outboundRequest = JSON.parse(options.body);
+      return {
+        ok: true,
+        json: async () => ({ status: 'success', leagueId: '498589', rankingCount: 1 }),
+      };
+    },
+  });
+
+  assert.deepEqual(parsed.rankings[0], expectedRanking);
+  assert.deepEqual(outboundRequest.rankings[0], expectedRanking);
+  assert.equal(JSON.stringify(outboundRequest).includes('private_notes'), false);
+});
+
 test('keeps projected receptions distinct from projected targets for WR and TE evidence', () => {
   const parsed = parseDraftProfileFile(JSON.stringify({
     schemaVersion: 1,
