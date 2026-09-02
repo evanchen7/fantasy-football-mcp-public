@@ -110,7 +110,7 @@
     cockpitPreferences = cockpit.sanitizePreferences({});
     elements.cockpit.hidden = !session?.leagueId;
     if (!session?.leagueId) return;
-    const key = cockpit.storageKey(session.leagueId);
+    const key = cockpit.storageKey(session.sessionKey);
     const stored = await extensionApi.storageGet(key);
     if (selectedSessionKey !== session.sessionKey) return;
     cockpitPreferences = cockpit.sanitizePreferences(stored?.[key]);
@@ -119,7 +119,7 @@
 
   async function saveCockpitPreferences(session) {
     if (!session?.leagueId) return;
-    const key = cockpit.storageKey(session.leagueId);
+    const key = cockpit.storageKey(session.sessionKey);
     await extensionApi.storageSet({ [key]: cockpitPreferences });
   }
 
@@ -194,7 +194,7 @@
     const iconUrl = webext.runtime?.getURL
       ? webext.runtime.getURL('icons/football-128.png')
       : 'icons/football-128.png';
-    await extensionApi.createNotification(`draft-turn-${session.leagueId}`, {
+    await extensionApi.createNotification(cockpit.notificationId(session.sessionKey), {
       type: 'basic',
       iconUrl,
       title: decision.title,

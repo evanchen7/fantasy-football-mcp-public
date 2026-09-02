@@ -836,7 +836,8 @@ test('dashboard exposes the bounded live draft cockpit without unsafe HTML rende
     assert.match(html, new RegExp(`id="${id}"`));
   }
   assert.match(html, /shared\/draft-cockpit\.js/);
-  assert.match(appSource, /storageKey\(leagueId\)/);
+  assert.match(appSource, /storageKey\(sessionKey\)/);
+  assert.match(appSource, /data\?\.state\?\.sessionKey/);
   assert.match(appSource, /preserveCockpit/);
   assert.doesNotMatch(appSource, /\.innerHTML\s*=/);
 });

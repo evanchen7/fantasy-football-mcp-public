@@ -25,7 +25,7 @@ Acceptance:
 ## Phase 2: shared cockpit preference state
 
 - Create a shared pure JS module with bounded allowlisting.
-- Key preferences by validated exact league ID/session.
+- Key preferences by the validated exact `sport:leagueId` session identity.
 - Support add, remove, move, drafted reconciliation, and up-to-three comparison selections.
 - Add opt-in notification settings and revision-based deduplication.
 

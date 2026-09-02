@@ -300,6 +300,14 @@ test('manifest keeps the recorder UI and cross-browser background lock broker', 
   assert.match(html, /draft-cockpit\.js/);
   assert.match(html, /id="queue-candidate"/);
   assert.match(html, /id="turn-notifications"/);
+  assert.match(
+    fs.readFileSync(path.join(extensionRoot, 'assistant.js'), 'utf8'),
+    /storageKey\(session\.sessionKey\)/,
+  );
+  assert.match(
+    fs.readFileSync(path.join(extensionRoot, 'assistant.js'), 'utf8'),
+    /notificationId\(session\.sessionKey\)/,
+  );
   assert.doesNotMatch(html, /<script[^>]*>[^<]+<\/script>/);
   assert.match(popupHtml, /id="open-assistant"/);
   assert.match(popupHtml, /id="open-dashboard"/);

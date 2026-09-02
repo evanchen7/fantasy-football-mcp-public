@@ -118,7 +118,7 @@ Follow this order for each live draft or Yahoo mock:
 7. Import or explicitly reuse a rankings profile for this exact draft if it does not already have one.
 8. Open the Firefox **Draft Assistant** sidebar or use the full dashboard, then refresh recommendations.
 
-The recorder continues watching new picks when other Yahoo draft panels are visible, but return to **Results → Round by Round** and rescan whenever the saved ledger is questionable. Recommendations are deliberately blocked for missing, duplicate, or unnumbered picks.
+The recorder continues watching new picks when other Yahoo draft panels are visible. In particular, the active Yahoo **Picks** tab is a strict secondary feed for its currently rendered cards, alongside the last-pick banner; **Queue** entries are never treated as drafted players. The recorder does not scroll that virtualized panel; it accumulates newly rendered cards through Yahoo DOM changes and manual rescans. Return to **Results → Round by Round** and rescan whenever the saved ledger is questionable because that complete numbered table remains the only authoritative source and the only repair input. Recommendations are deliberately blocked for missing, duplicate, or unnumbered picks, and whenever the recorder cannot verify authoritative ledger capture integrity.
 
 ### 6. Import rankings and league settings
 
@@ -132,7 +132,7 @@ Before importing, check the team count and roster slots shown in the form. The s
 
 Google Drive is optional storage only; this app does not read Drive or Google Sheets at runtime. Download the sheet to your computer as `.xlsx` or export its ECR tab as CSV, then choose that local file in the dashboard.
 
-A matching local profile provides rankings and league settings with zero Yahoo API calls. Drafted players still come from the extension's live ledger.
+A matching local profile provides rankings and league settings with zero Yahoo API calls. Drafted players still come from the extension's live ledger. Yahoo's initialed player names are matched conservatively by name, position, and canonical NFL team; known equivalent provider codes such as Jacksonville's `JAX` and `JAC` are normalized before availability is decided.
 
 ### 7. Get recommendations
 
@@ -162,7 +162,7 @@ Each newly created Yahoo mock has a new identity. To reuse the same rankings wit
 
 Only sanitized rankings, roster settings, and provenance are copied. Picks are never copied between mocks.
 
-Queue preferences are also isolated by the new mock's exact league ID. They are never copied from the source profile, so a repeated mock starts with an empty queue unless you add players for that exact mock.
+Queue preferences are isolated by the new mock's exact Yahoo session identity (sport plus league ID). They are never copied from the source profile, so a repeated mock starts with an empty queue unless you add players for that exact mock.
 
 To remove that manual step for later mocks, use **Default for future drafts** in the dashboard. Choose **Yahoo Football**, select the saved source, and select **Set sport default**. On the first recommendation for a newly synced draft with no exact profile, the server atomically binds that default to the new identity and continues without a Yahoo API call. An already bound or imported exact profile always wins, and changing or clearing the default does not alter prior drafts. Default selection and automatic binding require a source profile for the current UTC year, so import a new sheet and replace or clear the pointer after a season rollover.
 
@@ -171,7 +171,9 @@ Yahoo's draft-client URL does not reliably distinguish a mock from a real draft,
 Use the two popup recovery controls for different jobs:
 
 - **Reset mock draft:** start over within the same exact mock/session. Keep the server running, close older tabs for that same mock, open the active tab, rescan, and confirm Reset. The imported profile is preserved.
-- **Full rescan & repair:** keep the current draft but replace a defective saved ledger. First show the complete current **Results → Round by Round** table. Repair is accepted only when the table is coherent, contiguous, unique, and current.
+- **Full rescan & repair:** keep the current draft but replace a defective saved ledger. First show the complete current **Results → Round by Round** table. Repair is accepted only when the completed ledger is coherent, contiguous, unique, and current. Yahoo's pre-rendered unfilled future rows are excluded only when they have an unambiguous positive pick number at or beyond one stable, visible, non-conflicting live current-pick marker; malformed, earlier, or unverifiable rows still block repair and authoritative replacement.
+
+An unsafe, ambiguous, or truncated authoritative scan preserves the prior numbered picks and syncs only a private boolean capture blocker for that exact league. The local recommender then stays blocked even if the older ledger looks contiguous. Numbered Picks-tab or banner observations captured before a verified Round-by-Round baseline are retained for recovery but also set this blocker. Only a later coherent Round-by-Round scan with a stable positive current-pick marker matching the ledger maximum, or a server-accepted repair, clears it. A coherent scan without current-pick evidence may update picks but preserves the prior capture decision; ordinary scans with no authoritative table cannot clear it. After a baseline exists, matching secondary observations deduplicate conservatively, while a different player reported for an already saved overall pick is retained as a duplicate. A secondary observation that later fills an already recorded gap is retained but also sets the capture blocker, so it cannot make the ledger recommendation-ready without Round-by-Round verification or repair.
 
 If the server says the draft changed during reset, rescan and confirm Reset again. Neither operation can target a merely “latest” draft; the exact active identity is required.
 
@@ -189,7 +191,7 @@ The integration is defensive by design:
 - When a snapshot expires, the provider attempts a normal paced and budgeted refresh. If that refresh fails, last-known-good data up to seven days old may still support identity matching, but recommendation risk remains unknown: stale status is not treated as current and stale headlines are not presented as recent news.
 - This app reserves at most 95 requests per UTC day in a private persistent counter, leaving a margin below the public 100-request limit. Other programs using the same key can still consume the provider's account-wide allowance.
 - Bounded player-detail lookups are used only when at least one requested ranking remains unresolved. Unrelated recent-news IDs do not consume that lookup allowance or produce an identity-coverage warning after the requested ranking pool is already resolved.
-- Only allowlisted player identity, status, timestamp, category, and headline fields reach recommendations. Fresh, exactly resolved rows may still be used when the API labels its overall coverage as limited; missing, unresolved, stale, rate-limited, unavailable, or out-of-coverage players remain explicitly unknown, and the coverage warning remains visible.
+- Only allowlisted player identity, status, timestamp, category, and headline fields reach recommendations. Fresh, exactly resolved rows may still be used when the API labels its overall coverage as limited; missing, unresolved, stale, rate-limited, unavailable, or out-of-coverage players remain explicitly unknown. The UI describes these results as bounded snapshots rather than inferring an API plan, and distinguishes a working feed with no fresh injury match from an unavailable feed.
 
 The first FantasyPros-enabled recommendation automatically fetches the base player catalog, injuries, and news and populates `~/.fantasy-football-mcp/fantasypros-snapshots.sqlite3` with each successful snapshot. No separate prefetch, database migration, or user refresh command is needed. The SQLite cache is bounded to sixteen snapshot variants and 8 MB of normalized record JSON. It contains normalized FantasyPros base snapshots only—not the API key, raw provider bodies, URLs, query strings, targeted identity lookups, Yahoo data, draft state, league IDs, or recommendation candidates. User-facing warnings identify stale fallback; stale per-player status and headlines are suppressed.
 

@@ -30,6 +30,7 @@
   let cockpitPreferences = cockpit?.sanitizePreferences({}) || null;
   let selectedPosition = 'OVERALL';
   let activeCockpitLeagueId = null;
+  let activeCockpitSessionKey = null;
 
   function clear(node) {
     node.replaceChildren();
@@ -620,13 +621,13 @@
     return result;
   }
 
-  function loadCockpitPreferences(leagueId) {
-    if (activeCockpitLeagueId === leagueId && cockpitPreferences) return;
-    activeCockpitLeagueId = leagueId;
+  function loadCockpitPreferences(sessionKey) {
+    if (activeCockpitSessionKey === sessionKey && cockpitPreferences) return;
+    activeCockpitSessionKey = sessionKey;
     selectedPosition = 'OVERALL';
     let stored = null;
     try {
-      stored = JSON.parse(localStorage.getItem(cockpit.storageKey(leagueId)) || 'null');
+      stored = JSON.parse(localStorage.getItem(cockpit.storageKey(sessionKey)) || 'null');
     } catch (_error) {
       stored = null;
     }
@@ -634,11 +635,11 @@
   }
 
   function saveCockpitPreferences() {
-    if (!activeCockpitLeagueId || !cockpitPreferences) return;
+    if (!activeCockpitSessionKey || !cockpitPreferences) return;
     cockpitPreferences = cockpit.sanitizePreferences(cockpitPreferences);
     try {
       localStorage.setItem(
-        cockpit.storageKey(activeCockpitLeagueId),
+        cockpit.storageKey(activeCockpitSessionKey),
         JSON.stringify(cockpitPreferences),
       );
     } catch (_error) {
@@ -887,7 +888,17 @@
 
   function renderCockpit(data, leagueId) {
     if (!cockpit || !data?.cockpit) return;
-    loadCockpitPreferences(leagueId);
+    const sessionKey = typeof data?.state?.sessionKey === 'string'
+      ? data.state.sessionKey
+      : '';
+    if (sessionKey.split(':')[1] !== leagueId) return;
+    try {
+      cockpit.storageKey(sessionKey);
+    } catch (_error) {
+      return;
+    }
+    activeCockpitLeagueId = leagueId;
+    loadCockpitPreferences(sessionKey);
     latestCockpitData = data;
     show('cockpit-panel');
     const candidates = cockpitCandidateMap(data);

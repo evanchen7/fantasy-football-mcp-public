@@ -54,7 +54,7 @@ Follow this order for each live draft or Yahoo mock:
 8. Open Firefox's **Draft Assistant** sidebar or remain in the dashboard, then refresh recommendations.
 9. When diagnosing any recommendation, inspect live draft state before requesting a next pick.
 
-The smaller Yahoo last-pick banner continues supplying new observations while other draft panels are visible. Return to **Results → Round by Round** and rescan when anything looks incomplete; its numbered table is the authoritative ledger.
+The smaller Yahoo last-pick banner and the active Yahoo **Picks** tab continue supplying new observations while other draft panels are visible. Picks-tab capture accepts only strict, currently rendered numbered cards from the semantic Queue/Picks tab control; Queue entries are ignored. It never scrolls the panel automatically; virtualized windows accumulate as Yahoo renders them and on manual rescan. Return to **Results → Round by Round** and rescan when anything looks incomplete; its numbered table remains the only authoritative ledger and repair source.
 
 ## What is recorded
 
@@ -89,11 +89,11 @@ The popup displays picks and recorder health, not recommendations, and it cannot
 
 ### Firefox Draft Assistant
 
-The sidebar shows up to five recommendations beside Yahoo. Above the detailed cards, an at-a-glance decision brief shows whether you are on the clock, next, a known number of picks away, or missing reliable turn timing; it also keeps the primary recommendation and two immediate fallbacks visible together. Its queue is stored only for the exact league in extension storage. Optional browser alerts fire only for a complete, current ledger when you are next or on the clock, and are deduplicated per recorded revision. Press plain **R** outside a form control for a manual refresh. The sidebar does not invent a countdown clock from pick distance.
+The sidebar shows up to five recommendations beside Yahoo. Above the detailed cards, an at-a-glance decision brief shows whether you are on the clock, next, a known number of picks away, or missing reliable turn timing; it also keeps the primary recommendation and two immediate fallbacks visible together. Its queue and alert preference are stored only for the exact Yahoo session identity (sport plus league ID) in extension storage. Numeric-league-only preference keys from earlier development builds are intentionally not migrated because their sport provenance cannot be proven. Optional browser alerts fire only for a complete, current ledger when you are next or on the clock, and are deduplicated per recorded revision. Press plain **R** outside a form control for a manual refresh. The sidebar does not invent a countdown clock from pick distance.
 
 It selects a league only from the active draft tab or an explicit saved-league choice; it never silently chooses the newest saved session. After the initial request, a newer pick for that exact league cancels stale work, debounces duplicate events, and refreshes automatically. Another league's storage updates do not affect it.
 
-Cards show roster fit, rank/ADP/tier/bye context, reasoning, injury/news risk, and explicitly uncalibrated confidence and return/simulation probabilities. Stale state, inferred team counts, unresolved player identities, unavailable roster settings, and unknown injury/news data are visibly degraded. When the server's optional Databricks critic is enabled and available, a separate advisory-only summary appears after the unchanged deterministic recommendations.
+Cards show roster fit, rank/ADP/tier/bye context, reasoning, injury/news risk, and explicitly uncalibrated confidence and return/simulation probabilities. Stale state, inferred team counts, unresolved player identities, unavailable roster settings, and unknown injury/news data are visibly degraded. FantasyPros coverage markers are described as bounded snapshots; when its feed works but no fresh injury record matches the player pool, the UI says that missing status does not mean healthy instead of calling the feed unavailable. When the server's optional Databricks critic is enabled and available, a separate advisory-only summary appears after the unchanged deterministic recommendations.
 
 ### Full dashboard
 
@@ -158,9 +158,9 @@ Use Repair when keeping the current draft but fixing missing, duplicate, unnumbe
 2. Open the popup and select **Full rescan & repair**.
 3. Confirm that you intend to replace the saved picks from that authoritative table.
 
-Repair proceeds only when every nonempty row has the expected safe shape, responsive copies agree, numbered picks are contiguous and unique, and the ledger is current. Lowering a saved maximum additionally requires Yahoo's current-pick evidence. The server must accept the staged replacement before the browser writes it; failure leaves the existing exact session unchanged.
+Repair proceeds only when every completed row has the expected safe shape, responsive copies agree, numbered picks are contiguous and unique, and the ledger is current. Yahoo can pre-render numbered rows for later picks; the recorder ignores an unparsed future row only when its pick text is a positive integer at or beyond one stable, rendered, non-conflicting Yahoo current-pick marker. Any earlier unparsed row, ambiguous or malformed row, unavailable or conflicting current-pick marker, or marker change during the scan fails closed. Lowering a saved maximum additionally requires Yahoo's current-pick evidence. The server must accept the staged replacement before the browser writes it; failure leaves the existing exact session unchanged.
 
-Ordinary automatic scans never replace a saved authoritative ledger with a shorter visible prefix. Recommendations stay blocked until ledger defects are repaired.
+Ordinary automatic scans never replace a saved authoritative ledger with a shorter visible prefix. An unsafe authoritative evaluation cannot replace the numbered ledger, while safely parsed ordinary observations continue through the conservative merge and sync path so newly visible gaps can still block recommendations. Picks-tab cards are secondary observations only: they never enter repair or authoritative replacement, never clear capture uncertainty, and their Yahoo injury badges are not treated as injury/news evidence. Numbered secondary observations recorded before a verified Round-by-Round baseline are retained but set one allowlisted boolean capture blocker for that exact league. It contains no DOM text or error details and makes the server block recommendations even when the picks look contiguous. A coherent authoritative scan clears it only when one stable positive Yahoo current-pick marker exactly follows the ledger maximum; without that evidence, the scan may update picks but preserves the prior capture decision. An accepted repair may also clear it. A scan with no Round-by-Round table leaves the prior server decision unchanged, so old clients and non-authoritative views cannot accidentally clear a block. After a baseline exists, equivalent panel/banner/ledger identities deduplicate; incompatible identities at the same overall pick remain explicit duplicates. If secondary capture later fills an already saved gap, the pick is retained but capture remains blocked until Round-by-Round verification or repair.
 
 ## FantasyPros injury/news evidence
 
@@ -233,6 +233,7 @@ Yahoo may have changed its layout. Select **Save diagnostics**. The report conta
 ## Correctness and privacy guarantees
 
 - Numbered **Results → Round by Round** data is authoritative; gaps, duplicates, and unnumbered picks block recommendations.
+- The active **Picks** tab is a rendered-card observation feed only; it never replaces or repairs the authoritative ledger and never auto-scrolls Yahoo.
 - Per-league browser keys and server validation prevent one league from overwriting another.
 - Durable repair/reset journals reconcile interrupted work before stale scanning or sync can resume.
 - A packaged background lock broker serializes same-league scans, repairs, and resets across tabs; a lost lease aborts protected work and leaves the journal recoverable.

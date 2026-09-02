@@ -4,6 +4,7 @@
   const MAX_WATCHLIST = 20;
   const MAX_COMPARISON = 3;
   const STORAGE_PREFIX = 'yahooDraftCockpitPreferences:v1:';
+  const SESSION_KEY_PATTERN = /^[a-z0-9_-]{1,16}:\d{1,32}$/i;
 
   function safeText(value, maximum = 120) {
     if (typeof value !== 'string' && typeof value !== 'number') return '';
@@ -87,10 +88,21 @@
     };
   }
 
-  function storageKey(leagueId) {
-    const id = safeText(leagueId, 32);
-    if (!/^\d{1,32}$/.test(id)) throw new Error('A valid Yahoo league ID is required.');
-    return `${STORAGE_PREFIX}${id}`;
+  function validSessionKey(value) {
+    const key = safeText(value, 64);
+    return SESSION_KEY_PATTERN.test(key) ? key.toLowerCase() : '';
+  }
+
+  function storageKey(sessionKey) {
+    const key = validSessionKey(sessionKey);
+    if (!key) throw new Error('A valid Yahoo sessionKey is required.');
+    return `${STORAGE_PREFIX}${encodeURIComponent(key)}`;
+  }
+
+  function notificationId(sessionKey) {
+    const key = validSessionKey(sessionKey);
+    if (!key) throw new Error('A valid Yahoo sessionKey is required.');
+    return `draft-turn-${encodeURIComponent(key)}`;
   }
 
   function addToWatchlist(preferences, value) {
@@ -169,13 +181,15 @@
     const safe = sanitizePreferences(preferences);
     const until = response?.state?.picksUntilUserTurn;
     const generatedAt = safeText(response?.generatedAt, 64);
-    const sessionKey = safeText(session?.sessionKey, 64);
+    const sessionKey = validSessionKey(session?.sessionKey);
+    const leagueId = safeText(session?.leagueId, 32);
+    const sessionLeagueId = sessionKey.split(':')[1] || '';
     const exactRevision = generatedAt && generatedAt === safeText(session?.updatedAt, 64);
     const authoritative = response?.state?.health?.complete === true;
     const fresh = response?.state?.health?.fresh === true;
     if (
       !safe.notificationsEnabled || !exactRevision || !authoritative || !fresh ||
-      !sessionKey || ![0, 1].includes(until)
+      !sessionKey || leagueId !== sessionLeagueId || ![0, 1].includes(until)
     ) return { notify: false, key: '', title: '', message: '' };
     const key = `${sessionKey}|${generatedAt}|${until}`.slice(0, 160);
     if (safe.lastNotificationKey === key) {
@@ -204,6 +218,7 @@
     addToWatchlist,
     markNotified,
     moveWatchlistEntry,
+    notificationId,
     playerKey,
     reconcileWatchlist,
     removeFromWatchlist,

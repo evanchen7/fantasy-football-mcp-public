@@ -28,6 +28,9 @@ _POSITION_ALIASES = {
     "Q/W/R/T": "SUPERFLEX",
     "OP": "SUPERFLEX",
 }
+# Yahoo uses JAX while several ranking providers use JAC. Keep this map small and
+# explicit so initialed-name matching still requires a known-equivalent team.
+_NFL_TEAM_ALIASES = {"JAC": "JAX"}
 _DEFAULT_ROSTER = [
     {"position": "QB", "count": 1},
     {"position": "RB", "count": 2},
@@ -127,6 +130,11 @@ def _position(value: Any) -> str:
     return _POSITION_ALIASES.get(result, result)
 
 
+def _nfl_team(value: Any) -> str:
+    result = str(value or "").strip().upper()
+    return _NFL_TEAM_ALIASES.get(result, result)
+
+
 @lru_cache(maxsize=2048)
 def _cached_name_tokens(text: str) -> tuple[str, ...]:
     normalized = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode()
@@ -155,8 +163,8 @@ def _same_player(pick: Mapping[str, Any], player: Mapping[str, Any]) -> bool:
 
     pick_position = _position(pick.get("position"))
     player_position = _position(player.get("position"))
-    pick_team = str(pick.get("nflTeam") or "").upper()
-    player_team = str(player.get("team") or "").upper()
+    pick_team = _nfl_team(pick.get("nflTeam"))
+    player_team = _nfl_team(player.get("team"))
     if (
         pick_position == "DST"
         and player_position == "DST"
@@ -267,6 +275,7 @@ def reconcile_live_draft(
     if reference.tzinfo is None:
         reference = reference.replace(tzinfo=timezone.utc)
     age_seconds = max(0.0, (reference - generated).total_seconds()) if generated else None
+    authoritative_capture_blocked = context.get("captureBlocked") is True
     warnings: list[str] = []
     if team_count_source.endswith("-clamped"):
         warnings.append(
@@ -283,6 +292,11 @@ def reconcile_live_draft(
         warnings.append(f"Numbered pick ledger has gaps: {missing}")
     if duplicate_numbers:
         warnings.append(f"Numbered pick ledger has duplicates: {duplicate_numbers}")
+    if authoritative_capture_blocked:
+        warnings.append(
+            "Authoritative Yahoo ledger capture integrity is unresolved; "
+            "recommendations remain blocked until a coherent Round-by-Round scan or repair"
+        )
     if not user_picks:
         warnings.append("No user picks have been identified yet")
     if generated is None:
@@ -307,7 +321,13 @@ def reconcile_live_draft(
         "userRoster": user_picks,
         "picks": picks,
         "health": {
-            "complete": not missing and not duplicate_numbers and unnumbered_count == 0,
+            "complete": (
+                not missing
+                and not duplicate_numbers
+                and unnumbered_count == 0
+                and not authoritative_capture_blocked
+            ),
+            "authoritativeCaptureBlocked": authoritative_capture_blocked,
             "fresh": generated is not None and age_seconds is not None and age_seconds <= 120,
             "teamCountSource": team_count_source,
             "missingPickNumbers": missing,
@@ -811,10 +831,16 @@ class LiveDraftRecommendationEngine:
             ),
         }
         if not state["health"]["complete"]:
-            warnings.append(
-                "Recommendation blocked because gaps, duplicate pick numbers, or unnumbered "
-                "picks make availability uncertain"
-            )
+            if state["health"]["authoritativeCaptureBlocked"]:
+                warnings.append(
+                    "Recommendation blocked because authoritative ledger capture integrity "
+                    "is unresolved and drafted-player availability is uncertain"
+                )
+            else:
+                warnings.append(
+                    "Recommendation blocked because gaps, duplicate pick numbers, or unnumbered "
+                    "picks make availability uncertain"
+                )
             return self._empty_result(base, "blocked", self._draft_advice(state), started)
         if not rankings:
             warnings.append(

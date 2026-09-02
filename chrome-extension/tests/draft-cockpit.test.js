@@ -5,6 +5,7 @@ const {
   addToWatchlist,
   markNotified,
   moveWatchlistEntry,
+  notificationId,
   reconcileWatchlist,
   removeFromWatchlist,
   sanitizePreferences,
@@ -20,7 +21,7 @@ const candidates = [
   { name: 'Josh Allen', position: 'QB', team: 'BUF', score: 86.5, tier: 'starter' },
 ];
 
-test('sanitizes exact-league cockpit preferences and bounds private player state', () => {
+test('sanitizes exact-session cockpit preferences and bounds private player state', () => {
   const raw = {
     watchlist: Array.from({ length: 30 }, (_, index) => ({
       ...candidates[index % candidates.length],
@@ -40,8 +41,17 @@ test('sanitizes exact-league cockpit preferences and bounds private player state
   assert.equal(preferences.notificationsEnabled, true);
   assert.ok(preferences.lastNotificationKey.length <= 160);
   assert.equal(JSON.stringify(preferences).includes('secret'), false);
-  assert.equal(storageKey('10572539'), 'yahooDraftCockpitPreferences:v1:10572539');
-  assert.throws(() => storageKey('../private'), /valid Yahoo league ID/);
+  assert.equal(
+    storageKey('f1:10572539'),
+    'yahooDraftCockpitPreferences:v1:f1%3A10572539',
+  );
+  assert.equal(storageKey('F1:10572539'), storageKey('f1:10572539'));
+  assert.notEqual(storageKey('f1:10572539'), storageKey('f2:10572539'));
+  assert.equal(notificationId('f1:10572539'), 'draft-turn-f1%3A10572539');
+  assert.notEqual(notificationId('f1:10572539'), notificationId('f2:10572539'));
+  assert.throws(() => storageKey('10572539'), /valid Yahoo sessionKey/);
+  assert.throws(() => storageKey('../private:10572539'), /valid Yahoo sessionKey/);
+  assert.throws(() => notificationId('10572539'), /valid Yahoo sessionKey/);
 });
 
 test('adds, reorders, removes, and reconciles a conservative exact player queue', () => {
@@ -114,4 +124,8 @@ test('turn notifications are opt-in, authoritative, urgent, and deduplicated', (
     ...response,
     state: { picksUntilUserTurn: 1, health: { complete: true, fresh: false } },
   }, session).notify, false);
+  assert.equal(shouldNotify(preferences, response, {
+    ...session,
+    sessionKey: session.leagueId,
+  }).notify, false);
 });

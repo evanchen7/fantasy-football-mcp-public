@@ -26,7 +26,7 @@ Implement the ten requested live-draft UX capabilities in one PR: watchlist/queu
 ## Architecture findings
 
 1. Compute all evidence-heavy cockpit sections inside the deterministic engine while the full evaluated frontier is available. This preserves consistency, bounds output, and adds zero network calls.
-2. Keep user-authored queue and comparison state client-local and exact-league keyed. The dashboard and extension have separate browser origins, so preferences are intentionally surface-local rather than pretending to synchronize.
+2. Keep user-authored queue and comparison state client-local and keyed by the exact `sport:leagueId` session identity. The dashboard and extension have separate browser origins, so preferences are intentionally surface-local rather than pretending to synchronize. Do not migrate earlier numeric-league-only keys because their sport provenance is unknowable.
 3. Add one shared pure JavaScript cockpit-state module for sanitization, identity matching, queue ordering, drafted-state reconciliation, comparison limits, and notification deduplication.
 4. Put the dense cockpit in the full dashboard. Keep the sidebar draft-clock focused: decision brief, compact queue, and opt-in turn notifications.
 5. Continue suppressing candidate-derived cockpit sections whenever the ledger is blocked. Readiness and recap progress may still explain the block without inventing availability.

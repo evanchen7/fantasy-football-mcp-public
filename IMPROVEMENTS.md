@@ -4,24 +4,24 @@ This list separates the delivered live-draft baseline from prioritized follow-up
 
 ## Delivered baseline
 
-- Firefox/Chrome Manifest V3 recorder with authoritative Round-by-Round backfill and last-pick capture.
+- Firefox/Chrome Manifest V3 recorder with authoritative Round-by-Round backfill plus strict rendered-card capture from the active Picks tab and last-pick banner. Secondary capture accumulates virtualized windows without auto-scrolling, cannot repair or replace the ledger, and stays recommendation-blocked until an authoritative baseline exists.
 - Private loopback sync plus sanitized JSON/CSV export.
 - Complete pick, fantasy-team, order, and user-roster context.
 - League-specific state validation and rollback-resistant private persistence.
 - Deterministic value, roster, dynamics, opponent, risk/news, scenario, and critic specialists.
 - Yahoo roster-slot support, including Superflex aliases.
-- Conservative player resolution, stale-state warnings, and incomplete-ledger blocking.
-- Popup ledger diagnostics with exact missing, duplicate, and sanitized unnumbered-pick details, plus guarded authoritative full repair.
+- Conservative player resolution with explicit equivalent NFL team-code aliases, stale-state warnings, and incomplete-ledger blocking.
+- Popup ledger diagnostics with exact missing, duplicate, and sanitized unnumbered-pick details, plus guarded authoritative full repair that distinguishes strictly numbered pre-rendered future rows using stable current-pick evidence. Unsafe or ambiguous capture persists a privacy-safe per-league server blocker until a verified coherent scan or accepted repair clears it.
 - Per-league browser storage, durable repair/reset reconciliation, and a cross-browser extension-background lock broker with bounded heartbeats, expiring session fences, and cooperative lease cancellation instead of Firefox content-script Web Locks.
 - Persistent Firefox Draft Assistant sidebar with explicit league selection, shared fail-closed recommendation components, and no Yahoo-page injection or draft actions.
 - Clock-aware at-a-glance decision brief in the sidebar and dashboard with explicit on-clock/next/picks-away states, a primary pick, two immediate fallbacks, and a guarded plain-R refresh shortcut. It uses reliable pick distance and does not invent a countdown timer.
-- League-scoped personal queues in the dashboard and Firefox sidebar, with bounded reorder/removal controls, conservative drafted-player reconciliation, and no profile-to-mock copying.
+- Exact-session-scoped personal queues in the dashboard and Firefox sidebar, with bounded reorder/removal controls, conservative drafted-player reconciliation, and no profile-to-mock copying.
 - Full live draft cockpit with position/tier filtering, three-strategy sensitivity, recent position-run alerts, roster-slot gap warnings, position-aware fallback tiers, readiness checks, bounded quick comparison, and value/reach recap.
 - Explicit opt-in, authoritative-ledger-only, deduplicated browser alerts when the user is next or on the clock; notifications remain advisory and never initiate a draft action.
 - Packaged cross-browser football icons plus compact, overflow-safe FantasyPros source and recent-news presentation in the sidebar and dashboard.
 - Loopback-only local dashboard with a configurable recommendation board, roster and draft-history views, specialist comparisons, critic checks, and data-source diagnostics.
 - Exact-session local DraftSheets/JSON profile import with bounded parsing, private atomic storage, zero Yahoo API calls when a matching profile is available, and current-season per-sport defaults for future profileless recorder drafts without overwriting exact profiles or copying picks.
-- Optional bounded FantasyPros injury/news enrichment with explicit API-tier coverage, one-request-per-second pacing, a private persistent 95-call UTC-day budget, FantasyPros attribution, rate-limit backoff, freshness, and per-player unknown-data weighting. Normalized base catalog/injury/news snapshots persist in a private SQLite cache (24-hour complete catalog; five-minute partial-catalog/injury/news retry), so fresh data survives restart without another request; failed refreshes can use stale identity data only while recommendation status/headlines remain unknown. Targeted recent-news identity calls are skipped once every requested ranking already has an exact identity, avoiding irrelevant warnings and request-budget use.
+- Optional bounded FantasyPros injury/news enrichment with factual bounded-snapshot disclosures, one-request-per-second pacing, a private persistent 95-call UTC-day budget, FantasyPros attribution, rate-limit backoff, freshness, and per-player unknown-data weighting. Normalized base catalog/injury/news snapshots persist in a private SQLite cache (24-hour complete catalog; five-minute partial-catalog/injury/news retry), so fresh data survives restart without another request; failed refreshes can use stale identity data only while recommendation status/headlines remain unknown. Targeted recent-news identity calls are skipped once every requested ranking already has an exact identity, avoiding irrelevant warnings and request-budget use.
 - Optional disabled-by-default Databricks advisory critic with public OSS SDK dependencies, unified authentication, a strict identity-free outbound allowlist, bounded timeout/output, coalescing and in-memory-only caching, fail-open behavior, and no authority to reorder, score, select, or draft a player.
 - Strict local recommendation UI boundary: allowlisted bounded requests, exact saved/Yahoo league resolution, authenticated-team verification, serialized Yahoo calls, post-scoring snapshot revalidation, and no-store responses.
 - Uncalibrated labels for heuristic probabilities and confidence.
