@@ -95,6 +95,55 @@ test('extracts only a canonical Yahoo player key and never returns its containin
   }
 });
 
+test('extracts a Yahoo player key only when every supported source agrees', () => {
+  const firstKey = '461.p.33536';
+  const secondKey = '461.p.99999';
+
+  assert.equal(extractYahooPlayerKey(fakeElement({
+    text: 'ambiguous direct attributes',
+    attributes: {
+      'data-player-key': firstKey,
+      'data-yahoo-player-key': secondKey,
+    },
+  })), null);
+
+  const matchingNested = fakeElement({
+    text: 'matching nested key',
+    attributes: { 'data-player-key': firstKey },
+  });
+  const matchingAnchor = fakeElement({
+    text: 'matching player link',
+    attributes: {
+      href: `/player/${firstKey}?player_key=${firstKey}`,
+    },
+  });
+  const agreeing = fakeElement({
+    text: 'all identity sources agree',
+    attributes: { 'data-player-key': firstKey },
+  });
+  agreeing.querySelectorAll = (selector) => {
+    if (selector === '[data-player-key]') return [matchingNested];
+    if (selector === '[data-yahoo-player-key]') return [];
+    if (selector === 'a[href]') return [matchingAnchor];
+    return [];
+  };
+  assert.equal(extractYahooPlayerKey(agreeing), firstKey);
+
+  const firstAnchor = fakeElement({
+    text: 'first player link',
+    attributes: { href: `/player/${firstKey}` },
+  });
+  const secondAnchor = fakeElement({
+    text: 'second player link',
+    attributes: { href: `/player/${secondKey}` },
+  });
+  const conflictingAnchors = fakeElement({ text: 'ambiguous player links' });
+  conflictingAnchors.querySelectorAll = (selector) => (
+    selector === 'a[href]' ? [firstAnchor, secondAnchor] : []
+  );
+  assert.equal(extractYahooPlayerKey(conflictingAnchors), null);
+});
+
 test('does not snapshot oversized containers that are likely the whole draft page', () => {
   const element = fakeElement({ text: `Pick 1 ${'player '.repeat(200)}` });
   assert.equal(snapshotPickElement(element), null);

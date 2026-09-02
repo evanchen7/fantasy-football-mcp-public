@@ -240,8 +240,13 @@
       const matched = matchedIndex >= 0
         ? unmatchedExistingNumbered.splice(matchedIndex, 1)[0]
         : null;
+      const matchedPlayerKey = parser.normalizePlayerKey(matched?.playerKey);
+      const preserveMatchedPlayerKey = (
+        !parser.normalizePlayerKey(pick?.playerKey) && matchedPlayerKey
+      );
       return {
         ...pick,
+        ...(preserveMatchedPlayerKey ? { playerKey: matchedPlayerKey } : {}),
         recordedAt: pick.recordedAt || matched?.recordedAt || timestamp,
       };
     }).sort((left, right) => Number(left.pickNumber) - Number(right.pickNumber));

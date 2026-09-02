@@ -77,15 +77,26 @@
 
   function extractYahooPlayerKey(element) {
     if (!element) return null;
+    const playerKeys = new Set();
+    const addPlayerKey = (value) => {
+      const playerKey = normalizePlayerKey(value);
+      if (playerKey) playerKeys.add(playerKey);
+      return playerKeys.size <= 1;
+    };
+
     for (const attribute of ['data-player-key', 'data-yahoo-player-key']) {
-      const direct = normalizePlayerKey(element.getAttribute?.(attribute));
-      if (direct) return direct;
-      const nested = element.querySelector?.(`[${attribute}]`);
-      const nestedKey = normalizePlayerKey(nested?.getAttribute?.(attribute));
-      if (nestedKey) return nestedKey;
+      if (!addPlayerKey(element.getAttribute?.(attribute))) return null;
+      const nested = element.querySelectorAll
+        ? [...element.querySelectorAll(`[${attribute}]`)]
+        : [element.querySelector?.(`[${attribute}]`)].filter(Boolean);
+      if (nested.length > 20) return null;
+      for (const node of nested) {
+        if (!addPlayerKey(node.getAttribute?.(attribute))) return null;
+      }
     }
 
-    const anchors = [...(element.querySelectorAll?.('a[href]') || [])].slice(0, 20);
+    const anchors = [...(element.querySelectorAll?.('a[href]') || [])];
+    if (anchors.length > 20) return null;
     for (const anchor of anchors) {
       const href = anchor.getAttribute?.('href');
       if (typeof href !== 'string' || href.length > 500) continue;
@@ -100,16 +111,15 @@
         continue;
       }
       for (const parameter of ['player_key', 'playerKey']) {
-        const queryKey = normalizePlayerKey(url.searchParams.get(parameter));
-        if (queryKey) return queryKey;
+        for (const queryValue of url.searchParams.getAll(parameter)) {
+          if (!addPlayerKey(queryValue)) return null;
+        }
       }
-      const pathKey = url.pathname
-        .split('/')
-        .map((part) => normalizePlayerKey(part))
-        .find(Boolean);
-      if (pathKey) return pathKey;
+      for (const pathPart of url.pathname.split('/')) {
+        if (!addPlayerKey(pathPart)) return null;
+      }
     }
-    return null;
+    return playerKeys.size === 1 ? [...playerKeys][0] : null;
   }
 
   function readField(element, selectors) {
