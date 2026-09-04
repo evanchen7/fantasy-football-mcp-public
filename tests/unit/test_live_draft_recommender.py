@@ -605,7 +605,12 @@ def test_missing_breakout_evidence_is_explained_without_degrading_recommendation
     assert all("breakoutWatch" not in item for item in result["recommendations"])
     assert result["capabilities"]["breakoutWatch"] is False
     assert result["cockpit"]["breakoutWatch"]["status"] == "unavailable"
-    assert "projection" in result["cockpit"]["breakoutWatch"]["message"].lower()
+    assert result["cockpit"]["breakoutWatch"]["message"] == (
+        "Breakout evidence is unavailable: five comparable RB, WR, or TE players "
+        "need fresh projections, opportunity evidence, and experience. Import "
+        "complete sourced evidence, or use FantasyPros projections with "
+        "conservatively matched Sleeper experience."
+    )
 
 
 def test_fantasypros_projection_evidence_is_output_only_and_strictly_allowlisted() -> None:
