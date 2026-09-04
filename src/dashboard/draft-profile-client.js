@@ -550,6 +550,21 @@
     return { STD: 'Standard', HALF: 'Half PPR', PPR: 'PPR' }[scoringFormat];
   }
 
+  function profileDefaultScoringSelection(currentDefault, selectedProfile) {
+    const currentDefaultMatches = Boolean(
+      currentDefault &&
+      selectedProfile &&
+      currentDefault.sourceLeagueId === selectedProfile.leagueId,
+    );
+    if (currentDefaultMatches && currentDefault.scoringFormat !== undefined) {
+      return safeScoringFormat(currentDefault.scoringFormat);
+    }
+    if (selectedProfile?.scoringFormat !== undefined) {
+      return safeScoringFormat(selectedProfile.scoringFormat);
+    }
+    return 'HALF';
+  }
+
   function profileChoiceLabel(value) {
     const profile = safeProfileSummary(value, 0);
     const usesSourceDate = Boolean(profile.asOf);
@@ -837,6 +852,7 @@
     parseDraftProfileFile,
     parseRosterPositions,
     profileChoiceLabel,
+    profileDefaultScoringSelection,
     profileScoringLabel,
     profileSportLabel,
     saveDraftProfile,

@@ -313,9 +313,10 @@
         : '';
     }
     const selected = choices.find((profile) => profile.leagueId === profileDefaultSource.value);
-    profileDefaultScoring.value = currentDefault?.sourceLeagueId === selected?.leagueId
-      ? (currentDefault.scoringFormat || selected?.scoringFormat || 'HALF')
-      : (selected?.scoringFormat || 'HALF');
+    profileDefaultScoring.value = profileClient.profileDefaultScoringSelection(
+      currentDefault,
+      selected,
+    );
     updateProfileDefaultControls();
   }
 
