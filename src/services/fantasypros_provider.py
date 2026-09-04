@@ -534,18 +534,25 @@ class FantasyProsProvider:
                 ),
             ]
             if scoring is not None:
+                # The official projection request is scoring-neutral. Keep the
+                # selected score in an internal scope because normalized cached
+                # rows contain only that scoring system's explicitly named field.
                 loads.append(
                     self._safe_load(
                         f"{request_year}/projections",
                         {
                             "week": 0,
                             "positions": ":".join(_PROJECTION_POSITIONS),
-                            "scoring": scoring,
                         },
                         "players",
                         self._max_projections,
                         self._projection_cache_ttl_seconds,
                         lambda raw: self._projection(raw, scoring),
+                        response_scope={
+                            "season": request_year,
+                            "week": 0,
+                            "scoring": scoring,
+                        },
                     )
                 )
             if scoring == "HALF":
@@ -796,7 +803,7 @@ class FantasyProsProvider:
         ttl_seconds: float,
         normalizer: Callable[[Mapping[str, Any]], _Record | None],
         *,
-        response_scope: Mapping[str, int] | None = None,
+        response_scope: Mapping[str, str | int] | None = None,
     ) -> _LoadResult:
         try:
             return await self._load(
@@ -932,7 +939,7 @@ class FantasyProsProvider:
         ttl_seconds: float,
         normalizer: Callable[[Mapping[str, Any]], _Record | None],
         *,
-        response_scope: Mapping[str, int] | None = None,
+        response_scope: Mapping[str, str | int] | None = None,
     ) -> _LoadResult:
         cache_key = self._cache_key(endpoint, params, response_scope)
         now = self._now()
@@ -1032,14 +1039,15 @@ class FantasyProsProvider:
     def _cache_key(
         endpoint: str,
         params: Mapping[str, str | int],
-        response_scope: Mapping[str, int] | None,
+        response_scope: Mapping[str, str | int] | None,
     ) -> tuple[str, tuple[tuple[str, str | int], ...]]:
         if response_scope is None:
             scoped_endpoint = endpoint
         else:
-            scoped_endpoint = (
-                f"{endpoint}@{response_scope.get('season')}:{response_scope.get('week')}"
+            scope = ":".join(
+                f"{key}={value}" for key, value in sorted(response_scope.items())
             )
+            scoped_endpoint = f"{endpoint}@{scope}"
         return scoped_endpoint, tuple(sorted(params.items()))
 
     @staticmethod
@@ -1062,7 +1070,7 @@ class FantasyProsProvider:
         endpoint: str,
         params: Mapping[str, str | int],
         payload: Mapping[str, Any],
-        response_scope: Mapping[str, int] | None,
+        response_scope: Mapping[str, str | int] | None,
     ) -> None:
         if endpoint == "players" and response_scope is not None:
             if (
@@ -1075,12 +1083,25 @@ class FantasyProsProvider:
         adp_match = re.fullmatch(r"(\d{4})/consensus-rankings", endpoint)
         if adp_match is not None:
             expected_scoring = params.get("scoring")
+            display_type = payload.get("type")
+            documented_type = payload.get("ranking_type_name")
             if (
-                int(adp_match.group(1)) != _positive_int(payload.get("year"))
+                payload.get("sport") != "NFL"
+                or int(adp_match.group(1)) != _positive_int(payload.get("year"))
                 or str(payload.get("week")) != "0"
                 or payload.get("position_id") != "ALL"
                 or payload.get("scoring") != expected_scoring
-                or str(payload.get("type") or "").upper() != "ADP"
+                or (display_type is None and documented_type is None)
+                or (
+                    display_type is not None
+                    and not FantasyProsProvider._adp_response_type_matches(
+                        display_type, expected_scoring
+                    )
+                )
+                or (
+                    documented_type is not None
+                    and FantasyProsProvider._canonical_label(documented_type) != "ADP"
+                )
             ):
                 raise FantasyProsProviderError("FantasyPros returned an invalid response scope")
             return
@@ -1088,15 +1109,59 @@ class FantasyProsProvider:
         if match is None:
             return
         expected_year = int(match.group(1))
-        expected_scoring = params.get("scoring")
+        requested_scoring = response_scope.get("scoring") if response_scope else None
         if (
-            str(payload.get("season")) != str(expected_year)
+            set(params) != {"week", "positions"}
+            or params.get("week") != 0
+            or requested_scoring not in _PROJECTION_SCORING
+            or response_scope is None
+            or response_scope.get("season") != expected_year
+            or response_scope.get("week") != 0
+            or str(payload.get("season")) != str(expected_year)
             or str(payload.get("week")) != "0"
-            or payload.get("scoring") != expected_scoring
+            or FantasyProsProvider._canonical_label(payload.get("scoring"))
+            not in _PROJECTION_SCORING
             or FantasyProsProvider._projection_positions(payload.get("positions"))
             != _PROJECTION_POSITIONS
+            or not FantasyProsProvider._projection_has_requested_points(
+                payload.get("players"), requested_scoring
+            )
         ):
             raise FantasyProsProviderError("FantasyPros returned an invalid response scope")
+
+    @staticmethod
+    def _canonical_label(value: Any) -> str:
+        if not isinstance(value, str):
+            return ""
+        return _WHITESPACE_RE.sub(" ", value.strip()).upper()
+
+    @staticmethod
+    def _adp_response_type_matches(value: Any, expected_scoring: Any) -> bool:
+        label = FantasyProsProvider._canonical_label(value)
+        return label == "ADP" or (
+            expected_scoring == "HALF" and label == "ADP HALF PPR"
+        )
+
+    @staticmethod
+    def _projection_has_requested_points(value: Any, scoring: Any) -> bool:
+        if not isinstance(value, list):
+            return False
+        points_field = {
+            "STD": "points",
+            "HALF": "points_half",
+            "PPR": "points_ppr",
+        }.get(scoring)
+        if points_field is None:
+            return False
+        return any(
+            isinstance(raw, Mapping)
+            and isinstance(raw.get("stats"), Mapping)
+            and FantasyProsProvider._projection_number(
+                raw["stats"].get(points_field)
+            )
+            is not None
+            for raw in value
+        )
 
     @staticmethod
     def _projection_positions(value: Any) -> tuple[str, ...] | None:
@@ -1171,7 +1236,7 @@ class FantasyProsProvider:
         params: Mapping[str, str | int],
         record_limit: int,
         *,
-        response_scope: Mapping[str, int] | None = None,
+        response_scope: Mapping[str, str | int] | None = None,
     ) -> FantasyProsSnapshotKey | None:
         if endpoint == "players" and params == {"ecr": "included"}:
             if response_scope is not None:
@@ -1218,22 +1283,22 @@ class FantasyProsProvider:
                 record_limit=record_limit,
             )
         projection_match = re.fullmatch(r"(\d{4})/projections", endpoint)
-        if projection_match is not None and set(params) == {
-            "week",
-            "positions",
-            "scoring",
-        }:
-            scoring = params.get("scoring")
+        if projection_match is not None and set(params) == {"week", "positions"}:
+            scoring = response_scope.get("scoring") if response_scope else None
+            season = int(projection_match.group(1))
             if (
                 params.get("week") != 0
                 or params.get("positions") != ":".join(_PROJECTION_POSITIONS)
                 or scoring not in _PROJECTION_SCORING
+                or response_scope is None
+                or response_scope.get("season") != season
+                or response_scope.get("week") != 0
             ):
                 return None
             return FantasyProsSnapshotKey(
                 "projections",
                 f"preseason-{str(scoring).lower()}",
-                season=int(projection_match.group(1)),
+                season=season,
                 week=0,
                 record_limit=record_limit,
             )

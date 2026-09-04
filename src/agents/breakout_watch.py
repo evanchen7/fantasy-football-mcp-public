@@ -194,6 +194,11 @@ def evaluate_breakout_watch(
         "message": (
             "Breakout labels use fresh sourced projection and opportunity evidence and are uncalibrated."
             if available
-            else "Breakout evidence is unavailable: import fresh sourced projection and opportunity fields for at least five comparable RB, WR, or TE players."
+            else (
+                "Breakout evidence is unavailable: five comparable RB, WR, or TE players "
+                "need fresh projections, opportunity evidence, and experience. Import "
+                "complete sourced evidence, or use FantasyPros projections with "
+                "conservatively matched Sleeper experience."
+            )
         ),
     }

@@ -258,7 +258,7 @@ def source_payloads() -> dict[str, dict[str, Any]]:
     }
 
 
-def _projection_payload(*, scoring: str = "HALF") -> dict[str, Any]:
+def _projection_payload(*, scoring: str = "STD") -> dict[str, Any]:
     return {
         "season": "2026",
         "week": "0",
@@ -307,10 +307,13 @@ def _projection_payload(*, scoring: str = "HALF") -> dict[str, Any]:
     }
 
 
-def _adp_payload(*, scoring: str = "HALF") -> dict[str, Any]:
+def _adp_payload(
+    *, scoring: str = "HALF", ranking_type: str = "ADP Half PPR"
+) -> dict[str, Any]:
     return {
         "sport": "NFL",
-        "type": "ADP",
+        "type": ranking_type,
+        "ranking_type_name": "ADP",
         "year": "2026",
         "week": "0",
         "position_id": "ALL",
@@ -425,6 +428,53 @@ async def test_half_ppr_adp_uses_scoring_specific_consensus_snapshot(
     assert restarted["players"][0]["yahoo_player_id"] == "501"
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ranking_type", ["ADP", "ADP Half PPR", " adp   half ppr "])
+async def test_half_ppr_adp_accepts_only_exact_canonical_type_aliases(
+    source_payloads: dict[str, dict[str, Any]],
+    ranking_type: str,
+) -> None:
+    source_payloads["projections"] = _projection_payload()
+    source_payloads["consensus-rankings"] = _adp_payload(ranking_type=ranking_type)
+
+    result = await _provider(
+        api_key="secret",
+        transport=FakeTransport(source_payloads),
+        clock=lambda: datetime(2026, 9, 1, tzinfo=timezone.utc),
+    ).get_player_updates(
+        [{"name": "Jordan Alpha", "position": "RB", "team": "SF"}],
+        year=2026,
+        projection_scoring="HALF",
+    )
+
+    assert result["players"][0]["average_draft_position"] == 18.5
+    assert result["players"][0]["adp_scoring"] == "HALF"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("omitted_field", ["type", "ranking_type_name"])
+async def test_half_ppr_adp_accepts_either_nonconflicting_type_discriminator(
+    source_payloads: dict[str, dict[str, Any]],
+    omitted_field: str,
+) -> None:
+    source_payloads["projections"] = _projection_payload()
+    adp_payload = _adp_payload()
+    del adp_payload[omitted_field]
+    source_payloads["consensus-rankings"] = adp_payload
+
+    result = await _provider(
+        api_key="secret",
+        transport=FakeTransport(source_payloads),
+        clock=lambda: datetime(2026, 9, 1, tzinfo=timezone.utc),
+    ).get_player_updates(
+        [{"name": "Jordan Alpha", "position": "RB", "team": "SF"}],
+        year=2026,
+        projection_scoring="HALF",
+    )
+
+    assert result["players"][0]["average_draft_position"] == 18.5
+
+
 @pytest.mark.parametrize(
     ("raw_id", "expected"),
     [
@@ -480,10 +530,17 @@ def test_adp_snapshot_rejects_noncanonical_yahoo_id(bad_id: object) -> None:
     "mutation",
     [
         {"year": "2025"},
+        {"sport": "NBA"},
         {"week": "1"},
         {"position_id": "RB"},
         {"scoring": "PPR"},
         {"type": "Preseason"},
+        {"type": "ADP PPR"},
+        {"type": "Half PPR ADP"},
+        {"type": "ADP Half-PPR"},
+        {"type": "ADP Half PPR Rankings"},
+        {"ranking_type_name": "ECR"},
+        {"type": None, "ranking_type_name": None},
     ],
 )
 async def test_half_ppr_adp_response_scope_mismatch_fails_closed(
@@ -547,7 +604,6 @@ async def test_preseason_projections_use_explicit_contract_and_strict_allowlist(
     assert projection_call["params"] == {
         "week": 0,
         "positions": "RB:WR:TE",
-        "scoring": "HALF",
     }
     assert result["projectionEvidence"] == {
         "status": "available",
@@ -694,7 +750,6 @@ async def test_catalog_adp_rejects_unverified_season_without_losing_projections(
     [
         ({"season": "2025"}, "preseason projections is temporarily unavailable"),
         ({"week": "1"}, "preseason projections is temporarily unavailable"),
-        ({"scoring": "PPR"}, "preseason projections is temporarily unavailable"),
         ({"positions": "RB:WR"}, "preseason projections is temporarily unavailable"),
         ({"positions": "TE,RB,WR"}, "preseason projections is temporarily unavailable"),
     ],
@@ -720,6 +775,163 @@ async def test_projection_response_scope_mismatch_fails_closed_without_zero_evid
     assert any(warning_fragment in warning for warning in result["warnings"])
     assert result["projectionEvidence"]["status"] == "unavailable"
     assert "projected_points" not in result["players"][0]
+
+
+@pytest.mark.asyncio
+async def test_projection_envelope_scoring_does_not_select_requested_points(
+    source_payloads: dict[str, dict[str, Any]],
+) -> None:
+    source_payloads["projections"] = _projection_payload(scoring="PPR")
+
+    result = await _provider(
+        api_key="secret",
+        transport=FakeTransport(source_payloads),
+        clock=lambda: datetime(2026, 9, 1, tzinfo=timezone.utc),
+    ).get_player_updates(
+        [
+            {
+                "name": "Jordan Alpha",
+                "position": "RB",
+                "team": "SF",
+                "fantasypros_id": 101,
+            }
+        ],
+        year=2026,
+        projection_scoring="HALF",
+    )
+
+    assert result["players"][0]["projected_points"] == 221.5
+    assert result["players"][0]["projection_scoring"] == "HALF"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("envelope_scoring", [None, "CUSTOM", "ADP Half PPR"])
+async def test_projection_rejects_unknown_envelope_scoring(
+    source_payloads: dict[str, dict[str, Any]],
+    envelope_scoring: object,
+) -> None:
+    source_payloads["projections"] = _projection_payload()
+    source_payloads["projections"]["scoring"] = envelope_scoring
+
+    result = await _provider(
+        api_key="secret",
+        transport=FakeTransport(source_payloads),
+        clock=lambda: datetime(2026, 9, 1, tzinfo=timezone.utc),
+    ).get_player_updates(
+        [{"name": "Jordan Alpha", "position": "RB", "team": "SF"}],
+        year=2026,
+        projection_scoring="HALF",
+    )
+
+    assert result["projectionEvidence"]["status"] == "unavailable"
+    assert "projected_points" not in result["players"][0]
+
+
+@pytest.mark.asyncio
+async def test_projection_scoring_is_derived_only_from_requested_stat_field(
+    source_payloads: dict[str, dict[str, Any]],
+) -> None:
+    payload = _projection_payload(scoring="STD")
+    del payload["players"][0]["stats"]["points_half"]
+    source_payloads["projections"] = payload
+
+    result = await _provider(
+        api_key="secret",
+        transport=FakeTransport(source_payloads),
+        clock=lambda: datetime(2026, 9, 1, tzinfo=timezone.utc),
+    ).get_player_updates(
+        [
+            {
+                "name": "Jordan Alpha",
+                "position": "RB",
+                "team": "SF",
+                "fantasypros_id": 101,
+            }
+        ],
+        year=2026,
+        projection_scoring="HALF",
+    )
+
+    assert result["projectionEvidence"]["scoring"] == "HALF"
+    assert "projected_points" not in result["players"][0]
+    assert result["players"][0]["identityResolved"] is True
+
+
+@pytest.mark.asyncio
+async def test_projection_snapshot_requires_requested_stat_field_evidence(
+    source_payloads: dict[str, dict[str, Any]],
+) -> None:
+    payload = _projection_payload(scoring="STD")
+    for player in payload["players"]:
+        player["stats"].pop("points_half", None)
+    source_payloads["projections"] = payload
+
+    result = await _provider(
+        api_key="secret",
+        transport=FakeTransport(source_payloads),
+        clock=lambda: datetime(2026, 9, 1, tzinfo=timezone.utc),
+    ).get_player_updates(
+        [{"name": "Jordan Alpha", "position": "RB", "team": "SF"}],
+        year=2026,
+        projection_scoring="HALF",
+    )
+
+    assert result["projectionEvidence"]["status"] == "unavailable"
+    assert result["projectionEvidence"]["refreshFailed"] is True
+    assert any(
+        "preseason projections is temporarily unavailable" in warning
+        for warning in result["warnings"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_scoring_neutral_projection_request_keeps_derived_caches_isolated(
+    source_payloads: dict[str, dict[str, Any]],
+) -> None:
+    source_payloads["players"].update({"season": "2026", "week": "0"})
+    source_payloads["projections"] = _projection_payload(scoring="STD")
+    transport = FakeTransport(source_payloads)
+    provider = _provider(
+        api_key="secret",
+        transport=transport,
+        clock=lambda: datetime(2026, 9, 1, tzinfo=timezone.utc),
+    )
+    identity = [
+        {
+            "name": "Jordan Alpha",
+            "position": "RB",
+            "team": "SF",
+            "fantasypros_id": 101,
+        }
+    ]
+
+    half = await provider.get_player_updates(
+        identity, year=2026, projection_scoring="HALF"
+    )
+    ppr = await provider.get_player_updates(
+        identity, year=2026, projection_scoring="PPR"
+    )
+    half_again = await provider.get_player_updates(
+        identity, year=2026, projection_scoring="HALF"
+    )
+
+    projection_calls = [
+        call for call in transport.calls if call["url"].endswith("/projections")
+    ]
+    assert len(projection_calls) == 2
+    assert all(
+        call["params"] == {"week": 0, "positions": "RB:WR:TE"}
+        for call in projection_calls
+    )
+    assert half["players"][0]["projected_points"] == 221.5
+    assert ppr["players"][0]["projected_points"] == 241.75
+    assert half_again["players"][0]["projected_points"] == 221.5
+    cache_path = snapshot_cache_module.DEFAULT_SNAPSHOT_CACHE_PATH
+    with sqlite3.connect(cache_path) as connection:
+        projection_variants = connection.execute(
+            "SELECT variant FROM snapshots WHERE endpoint = 'projections' ORDER BY variant"
+        ).fetchall()
+    assert projection_variants == [("preseason-half",), ("preseason-ppr",)]
 
 
 @pytest.mark.asyncio
