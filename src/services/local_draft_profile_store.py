@@ -595,7 +595,10 @@ def _write_all(sessions: Mapping[str, Any], destination: Path) -> None:
 
 
 def _sanitize_profile_default(value: Any) -> dict[str, str]:
-    if not isinstance(value, Mapping) or set(value) != {"sport", "sourceLeagueId"}:
+    if not isinstance(value, Mapping) or set(value) not in (
+        {"sport", "sourceLeagueId"},
+        {"sport", "sourceLeagueId", "scoringFormat"},
+    ):
         raise LocalDraftProfileValidationError(
             "local draft profile default fields are invalid"
         )
@@ -609,7 +612,15 @@ def _sanitize_profile_default(value: Any) -> dict[str, str]:
         raise LocalDraftProfileValidationError(
             "sourceLeagueId has an invalid format"
         )
-    return {"sport": sport, "sourceLeagueId": source_league_id}
+    result = {"sport": sport, "sourceLeagueId": source_league_id}
+    if "scoringFormat" in value:
+        scoring_format = value.get("scoringFormat")
+        if scoring_format not in _SCORING_FORMATS:
+            raise LocalDraftProfileValidationError(
+                "scoringFormat must be STD, HALF, or PPR"
+            )
+        result["scoringFormat"] = scoring_format
+    return result
 
 
 def _read_profile_defaults(path: Path) -> list[dict[str, str]]:
@@ -711,15 +722,17 @@ def set_default_local_draft_profile(
     sport: str,
     source_league_id: str,
     *,
+    scoring_format: str | None = None,
     profile_path: str | Path | None = None,
     defaults_path: str | Path | None = None,
     current_season: int | None = None,
 ) -> dict[str, str]:
     """Atomically select an existing same-sport profile as the default."""
 
-    selected = _sanitize_profile_default(
-        {"sport": sport, "sourceLeagueId": source_league_id}
-    )
+    selected_value = {"sport": sport, "sourceLeagueId": source_league_id}
+    if scoring_format is not None:
+        selected_value["scoringFormat"] = scoring_format
+    selected = _sanitize_profile_default(selected_value)
     profile_destination = _profile_store_path(profile_path)
     defaults_destination = _profile_defaults_store_path(
         defaults_path, profile_path=profile_path
@@ -880,6 +893,8 @@ def list_local_draft_profile_summaries(
         }
         if "asOf" in provenance:
             summary["asOf"] = provenance["asOf"]
+        if "scoringFormat" in profile["leagueSettings"]:
+            summary["scoringFormat"] = profile["leagueSettings"]["scoringFormat"]
         summaries.append(summary)
     return sorted(
         summaries,
@@ -903,6 +918,8 @@ def bind_local_draft_profile(
     source_league_id: str,
     target_draft_identity: Mapping[str, Any],
     path: str | Path | None = None,
+    *,
+    scoring_format: str | None = None,
 ) -> dict[str, Any]:
     """Explicitly copy sanitized profile data onto one exact target draft identity."""
 
@@ -910,6 +927,10 @@ def bind_local_draft_profile(
     source_id = _safe_string(source_league_id, "sourceLeagueId", 64)
     if not _IDENTIFIER.fullmatch(source_id):
         raise LocalDraftProfileValidationError("sourceLeagueId has an invalid format")
+    if scoring_format is not None and scoring_format not in _SCORING_FORMATS:
+        raise LocalDraftProfileValidationError(
+            "scoringFormat must be STD, HALF, or PPR"
+        )
     custom_path = path is not None or bool(os.getenv("FANTASY_FOOTBALL_DRAFT_PROFILE_PATH"))
     destination = _profile_store_path(path)
     with _STORE_LOCK:
@@ -933,22 +954,26 @@ def bind_local_draft_profile(
                 )
             raise LocalDraftProfileNotFoundError("selected local draft profile was not found")
 
+        desired = deepcopy(source)
+        desired["draft"] = target
+        if scoring_format is not None:
+            desired["leagueSettings"]["scoringFormat"] = scoring_format
+        desired = sanitize_local_draft_profile(desired)
+
         existing = profiles.get(target["sessionKey"])
         if existing is not None:
             if existing["draft"] != target:
                 raise LocalDraftProfileConflictError(
                     "target local profile identity does not match the synced draft"
                 )
-            if _reusable_profile_content(existing) == _reusable_profile_content(source):
+            if _reusable_profile_content(existing) == _reusable_profile_content(desired):
                 destination.chmod(0o600)
                 return existing
             raise LocalDraftProfileConflictError(
                 "selected draft already has a different local profile"
             )
 
-        bound = deepcopy(source)
-        bound["draft"] = target
-        bound = sanitize_local_draft_profile(bound)
+        bound = desired
         profiles[target["sessionKey"]] = bound
         _write_all(profiles, destination)
     return bound
@@ -1021,6 +1046,8 @@ def bind_default_local_draft_profile(
 
         bound = deepcopy(source)
         bound["draft"] = target
+        if "scoringFormat" in selected:
+            bound["leagueSettings"]["scoringFormat"] = selected["scoringFormat"]
         bound = sanitize_local_draft_profile(bound)
         _prepare_store_directory(
             profile_destination, tighten_existing=not custom_profile_path

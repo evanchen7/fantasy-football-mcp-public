@@ -20,6 +20,7 @@ def draft_context(league_id: str = "10462193") -> dict:
     return {
         "schemaVersion": 1,
         "source": "yahoo-draft-recorder",
+        "ledgerProof": "round-by-round",
         "generatedAt": "2026-08-31T22:45:00.000Z",
         "draft": {
             "sport": "f1",
@@ -200,6 +201,38 @@ def test_persists_only_literal_authoritative_capture_blocker(tmp_path: Path) -> 
     assert "secret" not in json.dumps(saved)
 
 
+def test_persists_only_the_exact_authoritative_ledger_proof(tmp_path: Path) -> None:
+    saved = save_live_draft(draft_context(), tmp_path / "live-drafts.json")
+
+    assert saved["ledgerProof"] == "round-by-round"
+
+
+@pytest.mark.parametrize(
+    "ledger_proof",
+    ["picks-panel", "ROUND BY ROUND", True, {"source": "round-by-round"}],
+)
+def test_rejects_malformed_authoritative_ledger_proof(
+    tmp_path: Path, ledger_proof: object
+) -> None:
+    context = draft_context()
+    context["ledgerProof"] = ledger_proof
+
+    with pytest.raises(LiveDraftValidationError, match="ledgerProof"):
+        save_live_draft(context, tmp_path / "live-drafts.json")
+
+
+def test_newer_payload_without_proof_does_not_inherit_saved_proof(tmp_path: Path) -> None:
+    path = tmp_path / "live-drafts.json"
+    save_live_draft(draft_context(), path)
+    context = draft_context()
+    context["generatedAt"] = "2026-08-31T22:46:00.000Z"
+    context.pop("ledgerProof")
+
+    saved = save_live_draft(context, path)
+
+    assert "ledgerProof" not in saved
+
+
 @pytest.mark.parametrize(
     "capture_blocked",
     [
@@ -302,6 +335,7 @@ def test_verified_repair_implicitly_clears_existing_capture_blocker(
     blocked["captureBlocked"] = True
     repair = draft_context()
     repair["repair"] = True
+    repair.pop("ledgerProof")
     repair["generatedAt"] = "2026-08-31T22:46:00.000Z"
     repair["picks"] = [repair["picks"][0]]
 
@@ -309,6 +343,7 @@ def test_verified_repair_implicitly_clears_existing_capture_blocker(
     saved = save_live_draft(repair, path)
 
     assert "captureBlocked" not in saved
+    assert saved["ledgerProof"] == "round-by-round"
     assert "captureBlocked" not in load_live_draft(path=path)
     assert save_live_draft(repair, path) == saved
 

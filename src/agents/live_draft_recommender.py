@@ -400,7 +400,10 @@ def reconcile_live_draft(
     if reference.tzinfo is None:
         reference = reference.replace(tzinfo=timezone.utc)
     age_seconds = max(0.0, (reference - generated).total_seconds()) if generated else None
-    authoritative_capture_blocked = context.get("captureBlocked") is True
+    authoritative_ledger_proven = context.get("ledgerProof") == "round-by-round"
+    authoritative_capture_blocked = (
+        context.get("captureBlocked") is True or not authoritative_ledger_proven
+    )
     warnings: list[str] = []
     if team_count_source.endswith("-clamped"):
         warnings.append(
@@ -417,7 +420,12 @@ def reconcile_live_draft(
         warnings.append(f"Numbered pick ledger has gaps: {missing}")
     if duplicate_numbers:
         warnings.append(f"Numbered pick ledger has duplicates: {duplicate_numbers}")
-    if authoritative_capture_blocked:
+    if not authoritative_ledger_proven:
+        warnings.append(
+            "Authoritative Yahoo Round-by-Round proof is unavailable; "
+            "recommendations remain blocked until the ledger is verified"
+        )
+    elif authoritative_capture_blocked:
         warnings.append(
             "Authoritative Yahoo ledger capture integrity is unresolved; "
             "recommendations remain blocked until a coherent Round-by-Round scan or repair"
@@ -453,6 +461,7 @@ def reconcile_live_draft(
                 and not authoritative_capture_blocked
             ),
             "authoritativeCaptureBlocked": authoritative_capture_blocked,
+            "authoritativeLedgerProven": authoritative_ledger_proven,
             "fresh": generated is not None and age_seconds is not None and age_seconds <= 120,
             "teamCountSource": team_count_source,
             "missingPickNumbers": missing,

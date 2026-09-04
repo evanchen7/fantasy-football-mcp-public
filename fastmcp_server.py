@@ -758,8 +758,14 @@ _DRAFT_PROFILE_FIELDS = frozenset(
 _DRAFT_PROFILE_BIND_FIELDS = frozenset(
     {"schemaVersion", "sourceLeagueId", "leagueId"}
 )
+_DRAFT_PROFILE_BIND_SCORING_FIELDS = _DRAFT_PROFILE_BIND_FIELDS | frozenset(
+    {"scoringFormat"}
+)
 _DRAFT_PROFILE_DEFAULT_FIELDS = frozenset(
     {"schemaVersion", "sport", "sourceLeagueId"}
+)
+_DRAFT_PROFILE_DEFAULT_SCORING_FIELDS = _DRAFT_PROFILE_DEFAULT_FIELDS | frozenset(
+    {"scoringFormat"}
 )
 _DRAFT_PROFILE_FORMATS = frozenset({"draftsheets-2026", "csv", "json"})
 _DRAFT_PROFILE_XLSX_MEDIA_TYPE = (
@@ -843,7 +849,8 @@ def _draft_ui_headers(request: Request) -> Dict[str, str]:
     headers = {
         "Access-Control-Allow-Headers": (
             "Content-Type, X-Fantasy-Draft-UI, X-Fantasy-League-ID, "
-            "X-Fantasy-Team-Count, X-Fantasy-Roster-Positions"
+            "X-Fantasy-Team-Count, X-Fantasy-Roster-Positions, "
+            "X-Fantasy-Scoring-Format"
         ),
         "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
         "Access-Control-Allow-Private-Network": "true",
@@ -951,13 +958,25 @@ def _load_bound_live_draft(league_id: str) -> dict[str, Any] | None:
 def _profile_response(profile: Dict[str, Any]) -> Dict[str, Any]:
     provenance = profile.get("provenance")
     provenance = provenance if isinstance(provenance, dict) else {}
-    return {
+    result = {
         "status": "success",
         "leagueId": profile["draft"]["leagueId"],
         "rankingCount": len(profile["rankings"]),
         "asOf": provenance.get("asOf"),
         "format": provenance.get("format"),
     }
+    scoring_format = profile["leagueSettings"].get("scoringFormat")
+    if scoring_format is not None:
+        result["scoringFormat"] = scoring_format
+    return result
+
+
+def _profile_scoring_format(value: Any) -> str:
+    if not isinstance(value, str) or value not in {"STD", "HALF", "PPR"}:
+        raise LocalDraftProfileValidationError(
+            "scoringFormat must be STD, HALF, or PPR"
+        )
+    return value
 
 
 def _profile_roster_headers(request: Request) -> tuple[int, dict[str, int]]:
@@ -1319,7 +1338,11 @@ async def set_draft_profile_default(request: Request) -> Response:
         return _draft_json_error(request, "Request body must be valid JSON", 400)
     if not isinstance(payload, dict):
         return _draft_json_error(request, "Request body must be a JSON object", 400)
-    if set(payload) != _DRAFT_PROFILE_DEFAULT_FIELDS:
+    payload_fields = frozenset(payload)
+    if payload_fields not in {
+        _DRAFT_PROFILE_DEFAULT_FIELDS,
+        _DRAFT_PROFILE_DEFAULT_SCORING_FIELDS,
+    }:
         return _draft_json_error(request, "Draft profile default fields are invalid", 400)
     if payload.get("schemaVersion") != 1 or isinstance(payload.get("schemaVersion"), bool):
         return _draft_json_error(request, "schemaVersion 1 is required", 400)
@@ -1332,9 +1355,27 @@ async def set_draft_profile_default(request: Request) -> Response:
         or not _DRAFT_LEAGUE_ID.fullmatch(source_league_id)
     ):
         return _draft_json_error(request, "sourceLeagueId has an invalid format", 400)
+    scoring_supplied = "scoringFormat" in payload
+    scoring_format = payload.get("scoringFormat")
+    if source_league_id is None:
+        if scoring_supplied and scoring_format is not None:
+            return _draft_json_error(
+                request, "scoringFormat must be null when clearing a default", 400
+            )
+    elif scoring_supplied:
+        try:
+            scoring_format = _profile_scoring_format(scoring_format)
+        except LocalDraftProfileValidationError as exc:
+            return _draft_json_error(request, str(exc), 400)
     try:
         if source_league_id is None:
             clear_default_local_draft_profile(sport)
+        elif scoring_supplied:
+            set_default_local_draft_profile(
+                sport,
+                source_league_id,
+                scoring_format=scoring_format,
+            )
         else:
             set_default_local_draft_profile(sport, source_league_id)
     except LocalDraftProfileNotFoundError as exc:
@@ -1345,14 +1386,14 @@ async def set_draft_profile_default(request: Request) -> Response:
         return _draft_json_error(request, "Draft profile default store is invalid", 400)
     except Exception:
         return _draft_json_error(request, "Draft profile service unavailable", 500)
-    return JSONResponse(
-        {
-            "status": "success",
-            "sport": sport,
-            "sourceLeagueId": source_league_id,
-        },
-        headers=headers,
-    )
+    result = {
+        "status": "success",
+        "sport": sport,
+        "sourceLeagueId": source_league_id,
+    }
+    if scoring_supplied:
+        result["scoringFormat"] = scoring_format
+    return JSONResponse(result, headers=headers)
 
 
 @server.custom_route(
@@ -1393,7 +1434,11 @@ async def bind_draft_profile(request: Request) -> Response:
         return _draft_json_error(request, "Request body must be valid JSON", 400)
     if not isinstance(payload, dict):
         return _draft_json_error(request, "Request body must be a JSON object", 400)
-    if set(payload) != _DRAFT_PROFILE_BIND_FIELDS:
+    payload_fields = frozenset(payload)
+    if payload_fields not in {
+        _DRAFT_PROFILE_BIND_FIELDS,
+        _DRAFT_PROFILE_BIND_SCORING_FIELDS,
+    }:
         return _draft_json_error(request, "Draft profile bind fields are invalid", 400)
     if payload.get("schemaVersion") != 1 or isinstance(payload.get("schemaVersion"), bool):
         return _draft_json_error(request, "schemaVersion 1 is required", 400)
@@ -1405,6 +1450,12 @@ async def bind_draft_profile(request: Request) -> Response:
     league_id = payload.get("leagueId")
     if not isinstance(league_id, str) or not _DRAFT_LEAGUE_ID.fullmatch(league_id):
         return _draft_json_error(request, "leagueId has an invalid format", 400)
+    scoring_format = None
+    if "scoringFormat" in payload:
+        try:
+            scoring_format = _profile_scoring_format(payload.get("scoringFormat"))
+        except LocalDraftProfileValidationError as exc:
+            return _draft_json_error(request, str(exc), 400)
     try:
         context = _load_bound_live_draft(league_id)
         if context is None:
@@ -1413,7 +1464,14 @@ async def bind_draft_profile(request: Request) -> Response:
                 "No synced live draft exists for the selected Yahoo league",
                 404,
             )
-        bound = bind_local_draft_profile(source_league_id, context["draft"])
+        if "scoringFormat" in payload:
+            bound = bind_local_draft_profile(
+                source_league_id,
+                context["draft"],
+                scoring_format=scoring_format,
+            )
+        else:
+            bound = bind_local_draft_profile(source_league_id, context["draft"])
         confirmed = load_local_draft_profile(context["draft"])
         if confirmed is None or confirmed != bound:
             raise RuntimeError("bound profile could not be confirmed")
@@ -1467,7 +1525,13 @@ async def receive_draft_profile_xlsx(request: Request) -> Response:
     league_id = request.headers.get("x-fantasy-league-id", "")
     if not _DRAFT_LEAGUE_ID.fullmatch(league_id):
         return _draft_json_error(request, "league header has an invalid format", 400)
+    scoring_header = request.headers.get("x-fantasy-scoring-format")
     try:
+        scoring_format = (
+            _profile_scoring_format(scoring_header)
+            if scoring_header is not None
+            else None
+        )
         teams, roster = _profile_roster_headers(request)
         context = _load_bound_live_draft(league_id)
         if context is None:
@@ -1492,6 +1556,8 @@ async def receive_draft_profile_xlsx(request: Request) -> Response:
                 if position in roster
             ],
         }
+        if scoring_format is not None:
+            profile["leagueSettings"]["scoringFormat"] = scoring_format
         saved = save_local_draft_profile(sanitize_local_draft_profile(profile))
     except (LocalDraftProfileValidationError, LiveDraftValidationError) as exc:
         return _draft_json_error(request, str(exc), 400)
@@ -1582,9 +1648,13 @@ async def receive_live_draft_revision(request: Request) -> Response:
     picks = context.get("picks")
     if not isinstance(picks, list) or len(picks) > MAX_PICKS:
         return _draft_json_error(request, "Draft revision service unavailable", 500)
-    capture_blocked = context.get("captureBlocked", False)
-    if not isinstance(capture_blocked, bool):
+    stored_capture_blocked = context.get("captureBlocked", False)
+    if not isinstance(stored_capture_blocked, bool):
         return _draft_json_error(request, "Draft revision service unavailable", 500)
+    capture_blocked = (
+        stored_capture_blocked is True
+        or context.get("ledgerProof") != "round-by-round"
+    )
     pick_numbers = [
         pick.get("pickNumber")
         for pick in picks

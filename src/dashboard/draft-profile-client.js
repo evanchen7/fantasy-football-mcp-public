@@ -15,6 +15,7 @@
   const POSITION_ORDER = ['QB', 'RB', 'WR', 'TE', 'FLEX', 'K', 'DST', 'BN', 'IR'];
   const PLAYER_POSITIONS = new Set(['QB', 'RB', 'WR', 'TE', 'K', 'DST']);
   const FORMATS = new Set(['draftsheets-2026', 'csv', 'json']);
+  const SCORING_FORMATS = new Set(['STD', 'HALF', 'PPR']);
   const BREAKOUT_EVIDENCE_KEYS = new Set([
     'source',
     'as_of',
@@ -43,6 +44,13 @@
       throw new Error('Saved profile sport is missing or invalid.');
     }
     return sport;
+  }
+
+  function safeScoringFormat(value) {
+    if (typeof value !== 'string' || !SCORING_FORMATS.has(value)) {
+      throw new Error('Scoring format must be Standard, Half PPR, or PPR.');
+    }
+    return value;
   }
 
   function finiteNumber(value, label) {
@@ -406,10 +414,14 @@
       const position = String(entry.position || '').trim().toUpperCase();
       if (POSITION_ORDER.includes(position)) values[position] = entry.count;
     });
-    return {
+    const result = {
       teams: safeInteger(settings.teams, 'Team count', 2, 20),
       rosterPositions: parseRosterPositions(values),
     };
+    if (settings.scoringFormat !== undefined) {
+      result.scoringFormat = safeScoringFormat(settings.scoringFormat);
+    }
+    return result;
   }
 
   function buildDraftProfileRequest(profile, now = new Date()) {
@@ -470,13 +482,19 @@
     return result;
   }
 
-  async function parseResponse(response, leagueId, operation) {
+  async function parseResponse(response, leagueId, operation, options = {}) {
     const result = await responseObject(response, operation);
     if (String(result.leagueId || '') !== leagueId) {
       throw new Error(`${operation} response did not match the selected Yahoo league.`);
     }
     if (result.status !== 'success') {
       throw new Error(`${operation} did not confirm success.`);
+    }
+    if (
+      Object.hasOwn(options, 'scoringFormat') &&
+      result.scoringFormat !== options.scoringFormat
+    ) {
+      throw new Error(`${operation} response did not match the selected scoring format.`);
     }
     return result;
   }
@@ -504,6 +522,9 @@
       };
       const asOf = optionalIsoDate(value.asOf, 'Source date');
       if (asOf) result.asOf = asOf.slice(0, 10);
+      if (value.scoringFormat !== undefined && value.scoringFormat !== null) {
+        result.scoringFormat = safeScoringFormat(value.scoringFormat);
+      }
       return result;
     } catch (_error) {
       throw new Error(`Saved profile summary ${index + 1} is invalid.`);
@@ -523,6 +544,12 @@
     return 'Other Yahoo fantasy sport';
   }
 
+  function profileScoringLabel(value) {
+    if (value === undefined || value === null) return 'Scoring not set';
+    const scoringFormat = safeScoringFormat(value);
+    return { STD: 'Standard', HALF: 'Half PPR', PPR: 'PPR' }[scoringFormat];
+  }
+
   function profileChoiceLabel(value) {
     const profile = safeProfileSummary(value, 0);
     const usesSourceDate = Boolean(profile.asOf);
@@ -531,7 +558,8 @@
       month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC',
     });
     return `${profileSportLabel(profile.sport)} · League ${profile.leagueId} · ` +
-      `${profileFormatLabel(profile.format)} · ${usesSourceDate ? 'source' : 'imported'} ` +
+      `${profileFormatLabel(profile.format)} · ${profileScoringLabel(profile.scoringFormat)} · ` +
+      `${usesSourceDate ? 'source' : 'imported'} ` +
       `${dateLabel} · ${profile.rankingCount} rankings`;
   }
 
@@ -579,7 +607,11 @@
       const sourceLeagueId = safeLeagueId(value.sourceLeagueId);
       if (sports.has(sport)) throw new Error('Saved profile defaults contain a duplicate sport.');
       sports.add(sport);
-      return { sport, sourceLeagueId };
+      const result = { sport, sourceLeagueId };
+      if (value.scoringFormat !== undefined && value.scoringFormat !== null) {
+        result.scoringFormat = safeScoringFormat(value.scoringFormat);
+      }
+      return result;
     });
   }
 
@@ -621,6 +653,20 @@
     const sourceLeagueId = sourceLeagueIdValue === null
       ? null
       : safeLeagueId(sourceLeagueIdValue);
+    const hasScoringFormat = Object.hasOwn(options, 'scoringFormat');
+    let scoringFormat;
+    if (hasScoringFormat) {
+      if (sourceLeagueId === null) {
+        if (options.scoringFormat !== null) {
+          throw new Error('Clearing a default requires a null scoring format.');
+        }
+        scoringFormat = null;
+      } else {
+        scoringFormat = safeScoringFormat(options.scoringFormat);
+      }
+    }
+    const request = { schemaVersion: 1, sport, sourceLeagueId };
+    if (hasScoringFormat) request.scoringFormat = scoringFormat;
     const fetchImpl = options.fetchImpl || globalScope.fetch?.bind(globalScope);
     if (!fetchImpl) throw new Error('Fetch is unavailable.');
     return withProfileRequestTimeout(options, 'Draft profile default', async (signal) => {
@@ -630,7 +676,7 @@
           'Content-Type': 'application/json',
           'X-Fantasy-Draft-UI': '1',
         },
-        body: JSON.stringify({ schemaVersion: 1, sport, sourceLeagueId }),
+        body: JSON.stringify(request),
         cache: 'no-store',
         credentials: 'omit',
         signal,
@@ -639,11 +685,14 @@
       if (
         result.status !== 'success' ||
         result.sport !== sport ||
-        result.sourceLeagueId !== sourceLeagueId
+        result.sourceLeagueId !== sourceLeagueId ||
+        (hasScoringFormat && result.scoringFormat !== scoringFormat)
       ) {
         throw new Error('Draft profile default response did not match the requested sport or source profile.');
       }
-      return { status: 'success', sport, sourceLeagueId };
+      return hasScoringFormat
+        ? { status: 'success', sport, sourceLeagueId, scoringFormat }
+        : { status: 'success', sport, sourceLeagueId };
     });
   }
 
@@ -655,6 +704,12 @@
     if (sourceLeagueId === leagueId) {
       throw new Error('Choose a saved profile from a different draft.');
     }
+    const hasScoringFormat = Object.hasOwn(options, 'scoringFormat');
+    const scoringFormat = hasScoringFormat
+      ? safeScoringFormat(options.scoringFormat)
+      : undefined;
+    const request = { schemaVersion: 1, sourceLeagueId, leagueId };
+    if (hasScoringFormat) request.scoringFormat = scoringFormat;
     const fetchImpl = options.fetchImpl || globalScope.fetch?.bind(globalScope);
     if (!fetchImpl) throw new Error('Fetch is unavailable.');
     return withProfileRequestTimeout(options, 'Draft profile reuse', async (signal) => {
@@ -664,7 +719,7 @@
           'Content-Type': 'application/json',
           'X-Fantasy-Draft-UI': '1',
         },
-        body: JSON.stringify({ schemaVersion: 1, sourceLeagueId, leagueId }),
+        body: JSON.stringify(request),
         cache: 'no-store',
         credentials: 'omit',
         signal,
@@ -672,6 +727,9 @@
       const result = await parseResponse(response, leagueId, 'Draft profile reuse');
       if (String(result.sourceLeagueId || '') !== sourceLeagueId) {
         throw new Error('Draft profile reuse response did not match the chosen source profile.');
+      }
+      if (hasScoringFormat && result.scoringFormat !== scoringFormat) {
+        throw new Error('Draft profile reuse response did not match the selected scoring format.');
       }
       return result;
     });
@@ -693,7 +751,14 @@
       cache: 'no-store',
       credentials: 'omit',
     });
-    return parseResponse(response, request.leagueId, 'Draft profile import');
+    return parseResponse(
+      response,
+      request.leagueId,
+      'Draft profile import',
+      Object.hasOwn(request.leagueSettings, 'scoringFormat')
+        ? { scoringFormat: request.leagueSettings.scoringFormat }
+        : {},
+    );
   }
 
   async function saveDraftProfileXlsx(file, leagueIdValue, options = {}) {
@@ -727,12 +792,22 @@
         'X-Fantasy-League-ID': leagueId,
         'X-Fantasy-Team-Count': String(settings.teams),
         'X-Fantasy-Roster-Positions': rosterHeader,
+        ...(settings.scoringFormat
+          ? { 'X-Fantasy-Scoring-Format': settings.scoringFormat }
+          : {}),
       },
       body: bytes,
       cache: 'no-store',
       credentials: 'omit',
     });
-    return parseResponse(response, leagueId, 'DraftSheets profile import');
+    return parseResponse(
+      response,
+      leagueId,
+      'DraftSheets profile import',
+      Object.hasOwn(settings, 'scoringFormat')
+        ? { scoringFormat: settings.scoringFormat }
+        : {},
+    );
   }
 
   function describeProfileFreshness(value, now = new Date()) {
@@ -762,6 +837,7 @@
     parseDraftProfileFile,
     parseRosterPositions,
     profileChoiceLabel,
+    profileScoringLabel,
     profileSportLabel,
     saveDraftProfile,
     saveDraftProfileXlsx,

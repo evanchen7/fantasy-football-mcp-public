@@ -7,8 +7,31 @@
   const ledgerHealth =
     globalScope.YahooDraftLedgerHealth ||
     (typeof require === 'function' ? require('./ledger-health.js') : null);
+  const AUTHORITATIVE_LEDGER_PROOF = 'round-by-round';
+  const IDENTITY_CONFLICT_ERROR =
+    'Saved draft state belongs to a different Yahoo team for this league. Open the matching draft tab, or reset that saved draft before recording this team.';
+
+  function hasDraftIdentityConflict(existing, metadata) {
+    return Boolean(existing) && !sameDraftIdentity(existing, metadata);
+  }
+
+  function identityConflictResult(existing) {
+    return {
+      ok: false,
+      reason: 'identity-conflict',
+      session: existing,
+      error: IDENTITY_CONFLICT_ERROR,
+    };
+  }
+
+  function assertCompatibleDraftIdentity(existing, metadata) {
+    if (hasDraftIdentityConflict(existing, metadata)) {
+      throw new Error(IDENTITY_CONFLICT_ERROR);
+    }
+  }
 
   function updateDraftSession(existing, metadata, observedPicks, timestamp) {
+    assertCompatibleDraftIdentity(existing, metadata);
     if (existing?.numberedLedgerAuthoritative === true) {
       const existingNumbered = (existing.picks || []).filter(hasPickNumber);
       const mergedNumbered = mergeSecondaryNumberedObservations(
@@ -16,13 +39,18 @@
         observedPicks,
         timestamp,
       );
-      return updateDraftSessionFromAuthoritativeLedger(
+      const updated = updateDraftSessionFromAuthoritativeLedger(
         existing,
         metadata,
         mergedNumbered,
         observedPicks,
         timestamp,
       );
+      if (existing?.ledgerProof !== AUTHORITATIVE_LEDGER_PROOF) {
+        delete updated.ledgerProof;
+        return setAuthoritativeCaptureBlocked(updated, true);
+      }
+      return updated;
     }
     const existingPicks = existing?.picks || [];
     const observedWithTimestamps = (observedPicks || []).map((pick) => ({
@@ -55,6 +83,44 @@
     }
     if (timestamp) updated.updatedAt = timestamp;
     return updated;
+  }
+
+  function blockDraftSessionForNoEvidence(existing, metadata, timestamp) {
+    assertCompatibleDraftIdentity(existing, metadata);
+    if (existing?.authoritativeCaptureBlocked === true) return existing;
+    const session = existing || updateDraftSession(undefined, metadata, [], timestamp);
+    return setAuthoritativeCaptureBlocked(session, true, timestamp);
+  }
+
+  function prepareCurrentPickOnlyUpdate(
+    existing,
+    metadata,
+    currentPickNumber,
+    timestamp,
+  ) {
+    if (hasDraftIdentityConflict(existing, metadata)) return identityConflictResult(existing);
+    const block = (error) => ({
+      ok: false,
+      session: blockDraftSessionForNoEvidence(existing, metadata, timestamp),
+      error,
+    });
+    if (
+      existing?.ledgerProof !== AUTHORITATIVE_LEDGER_PROOF ||
+      existing?.authoritativeCaptureBlocked === true
+    ) {
+      return block(
+        'Yahoo’s current-pick marker cannot establish authoritative ledger proof by itself. Open Results → Round by Round and rescan.',
+      );
+    }
+    const currentPick = Number(currentPickNumber);
+    const expectedCurrentPick = ledgerHealth.analyzeLedger(existing.picks || [])
+      .highestPickNumber + 1;
+    if (!Number.isInteger(currentPick) || currentPick < 1 || currentPick !== expectedCurrentPick) {
+      return block(
+        `Yahoo shows current pick ${Number.isInteger(currentPick) && currentPick > 0 ? currentPick : 'unavailable'}, but the saved ledger expects pick ${expectedCurrentPick}. Open Results → Round by Round and rescan.`,
+      );
+    }
+    return { ok: true, session: existing };
   }
 
   function identityKey(sessionKey, pick) {
@@ -188,6 +254,7 @@
     observedPicks,
     timestamp,
   ) {
+    assertCompatibleDraftIdentity(existing, metadata);
     const hasNumberedObservation = (observedPicks || []).some(hasPickNumber);
     if (!hasNumberedObservation) {
       return updateDraftSession(existing, metadata, observedPicks, timestamp);
@@ -219,6 +286,7 @@
       timestamp,
     );
     delete updated.numberedLedgerAuthoritative;
+    delete updated.ledgerProof;
     return setAuthoritativeCaptureBlocked(updated, true);
   }
 
@@ -229,6 +297,7 @@
     observedNonLedgerPicks,
     timestamp,
   ) {
+    assertCompatibleDraftIdentity(existing, metadata);
     const unmatchedExistingNumbered = (existing?.picks || [])
       .filter(hasPickNumber)
       .map((pick) => ({ ...pick }));
@@ -271,6 +340,7 @@
       teamId: metadata.teamId,
       sessionKey: metadata.sessionKey,
       numberedLedgerAuthoritative: true,
+      ledgerProof: AUTHORITATIVE_LEDGER_PROOF,
       picks: [...numberedPicks, ...unmatchedUnnumbered],
       updatedAt: timestamp,
     };
@@ -284,6 +354,7 @@
     timestamp,
     options = {},
   ) {
+    if (hasDraftIdentityConflict(existing, metadata)) return identityConflictResult(existing);
     const savedHealth = ledgerHealth.analyzeLedger(existing?.picks || []);
     const visibleHealth = ledgerHealth.analyzeLedger(authoritativePicks || []);
     if (visibleHealth.highestPickNumber < savedHealth.highestPickNumber) {
@@ -341,6 +412,7 @@
   }
 
   function repairDraftSession(existing, metadata, authoritativePicks, timestamp) {
+    if (hasDraftIdentityConflict(existing, metadata)) return identityConflictResult(existing);
     const health = ledgerHealth.analyzeLedger(authoritativePicks);
     if (!health.isComplete) return { ok: false, session: existing, health };
 
@@ -412,6 +484,18 @@
 
   function createDurableRepairCoordinator(dependencies) {
     async function begin(sessionKey, session) {
+      if (
+        sessionKey !== session?.sessionKey ||
+        !sameDraftIdentity(session, session)
+      ) {
+        throw new Error('Repair session identity is missing or inconsistent. Rescan the exact Yahoo draft tab.');
+      }
+      if (
+        dependencies.expectedIdentity &&
+        !sameDraftIdentity(session, dependencies.expectedIdentity)
+      ) {
+        throw new Error(IDENTITY_CONFLICT_ERROR);
+      }
       await dependencies.writePending({
         schemaVersion: 1,
         state: 'intent',
@@ -431,7 +515,8 @@
         typeof pending.sessionKey === 'string' &&
         pending.session &&
         typeof pending.session === 'object' &&
-        pending.session.sessionKey === pending.sessionKey;
+        pending.session.sessionKey === pending.sessionKey &&
+        sameDraftIdentity(pending.session, pending.session);
     }
 
     async function reconcile() {
@@ -439,6 +524,12 @@
       if (!pending) return { ok: true, reconciled: false };
       if (!validatePending(pending)) {
         return { ok: false, error: 'Pending repair record is invalid; stale sync remains blocked.' };
+      }
+      if (
+        dependencies.expectedIdentity &&
+        !sameDraftIdentity(pending.session, dependencies.expectedIdentity)
+      ) {
+        return identityConflictResult(pending.session);
       }
       if (dependencies.isSessionReset) {
         let discardedByReset;
@@ -690,10 +781,12 @@
   }
 
   const api = {
+    blockDraftSessionForNoEvidence,
     commitDraftRepair,
     createDurableRepairCoordinator,
     createDurableResetCoordinator,
     prepareAutomaticAuthoritativeUpdate,
+    prepareCurrentPickOnlyUpdate,
     prepareDraftRepair,
     repairDraftSession,
     sameDraftIdentity,

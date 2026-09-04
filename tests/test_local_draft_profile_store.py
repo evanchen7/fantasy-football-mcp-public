@@ -444,6 +444,18 @@ def test_lists_privacy_minimal_profile_summaries(tmp_path: Path) -> None:
     assert "rankings" not in serialized
 
 
+def test_profile_summary_includes_only_explicit_scoring_metadata(tmp_path: Path) -> None:
+    path = tmp_path / "draft-profiles.json"
+    profile = local_profile("111", "3")
+    profile["leagueSettings"]["scoringFormat"] = "PPR"
+    save_local_draft_profile(profile, path)
+
+    summaries = profile_store.list_local_draft_profile_summaries(path)
+
+    assert summaries[0]["scoringFormat"] == "PPR"
+    assert "leagueSettings" not in summaries[0]
+
+
 def test_explicit_bind_copies_only_profile_data_to_exact_target_identity(
     tmp_path: Path,
 ) -> None:
@@ -460,6 +472,32 @@ def test_explicit_bind_copies_only_profile_data_to_exact_target_identity(
     assert load_local_draft_profile(target, path) == bound
     assert load_local_draft_profile(draft_identity("111", "3"), path) == source
     assert "picks" not in json.dumps(bound)
+
+
+def test_explicit_bind_applies_only_an_exact_scoring_override(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "draft-profiles.json"
+    source = save_local_draft_profile(local_profile("111", "3"), path)
+    target = draft_identity("222", "9")
+
+    bound = profile_store.bind_local_draft_profile(
+        "111", target, path, scoring_format="HALF"
+    )
+
+    assert "scoringFormat" not in source["leagueSettings"]
+    assert bound["leagueSettings"] == {
+        **source["leagueSettings"],
+        "scoringFormat": "HALF",
+    }
+    assert load_local_draft_profile(draft_identity("111", "3"), path) == source
+    assert "picks" not in json.dumps(bound)
+
+    with pytest.raises(LocalDraftProfileValidationError, match="STD, HALF, or PPR"):
+        profile_store.bind_local_draft_profile(
+            "111", draft_identity("333", "7"), path, scoring_format="half"
+        )
+    assert load_local_draft_profile(draft_identity("333", "7"), path) is None
 
 
 def test_explicit_bind_rejects_missing_cross_sport_and_existing_target_profiles(
@@ -514,6 +552,86 @@ def test_sets_lists_loads_and_clears_one_default_per_sport(tmp_path: Path) -> No
     assert clear_default_local_draft_profile("nfl", defaults_path) is True
     assert clear_default_local_draft_profile("nfl", defaults_path) is False
     assert list_local_draft_profile_defaults(defaults_path) == []
+
+
+def test_default_scoring_override_is_backward_compatible_and_applies_to_future_draft(
+    tmp_path: Path,
+) -> None:
+    profile_path = tmp_path / "private" / "draft-profiles.json"
+    defaults_path = tmp_path / "private" / "draft-profile-defaults.json"
+    source = local_profile("10557704", "12")
+    source["draft"].update(sport="f1", sessionKey="f1:10557704")
+    saved_source = save_local_draft_profile(source, profile_path)
+
+    # A schemaVersion 1 pointer written by an older release remains readable.
+    defaults_path.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "defaults": [{"sport": "f1", "sourceLeagueId": "10557704"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert list_local_draft_profile_defaults(defaults_path) == [
+        {"sport": "f1", "sourceLeagueId": "10557704"}
+    ]
+
+    selected = set_default_local_draft_profile(
+        "f1",
+        "10557704",
+        scoring_format="HALF",
+        profile_path=profile_path,
+        defaults_path=defaults_path,
+    )
+    target = {
+        "sport": "f1",
+        "leagueId": "498589",
+        "teamId": "6",
+        "sessionKey": "f1:498589",
+    }
+    bound = bind_default_local_draft_profile(
+        target,
+        profile_path=profile_path,
+        defaults_path=defaults_path,
+    )
+
+    assert selected == {
+        "sport": "f1",
+        "sourceLeagueId": "10557704",
+        "scoringFormat": "HALF",
+    }
+    assert json.loads(defaults_path.read_text(encoding="utf-8")) == {
+        "schemaVersion": 1,
+        "defaults": [selected],
+    }
+    assert bound is not None
+    assert bound["draft"] == target
+    assert bound["leagueSettings"]["scoringFormat"] == "HALF"
+    assert bound["rankings"] == saved_source["rankings"]
+    assert "scoringFormat" not in saved_source["leagueSettings"]
+    assert load_local_draft_profile(saved_source["draft"], profile_path) == saved_source
+    assert "picks" not in json.dumps(bound)
+
+
+@pytest.mark.parametrize("scoring_format", ["half", "", "CUSTOM", 0, True])
+def test_default_selection_rejects_noncanonical_scoring_override(
+    tmp_path: Path, scoring_format: object
+) -> None:
+    profile_path = tmp_path / "draft-profiles.json"
+    defaults_path = tmp_path / "draft-profile-defaults.json"
+    save_local_draft_profile(local_profile("111", "3"), profile_path)
+
+    with pytest.raises(LocalDraftProfileValidationError, match="STD, HALF, or PPR"):
+        set_default_local_draft_profile(
+            "nfl",
+            "111",
+            scoring_format=scoring_format,  # type: ignore[arg-type]
+            profile_path=profile_path,
+            defaults_path=defaults_path,
+        )
+
+    assert not defaults_path.exists()
 
 
 def test_default_selection_rejects_missing_and_cross_sport_sources(
@@ -606,6 +724,7 @@ def test_default_bind_is_exact_idempotent_and_never_copies_picks(
     set_default_local_draft_profile(
         "nfl",
         "111",
+        scoring_format="HALF",
         profile_path=profile_path,
         defaults_path=defaults_path,
     )
@@ -620,7 +739,11 @@ def test_default_bind_is_exact_idempotent_and_never_copies_picks(
     assert bound is not None
     assert bound["draft"] == target
     assert bound["rankings"] == source["rankings"]
-    assert bound["leagueSettings"] == source["leagueSettings"]
+    assert bound["leagueSettings"] == {
+        **source["leagueSettings"],
+        "scoringFormat": "HALF",
+    }
+    assert "scoringFormat" not in source["leagueSettings"]
     assert "picks" not in json.dumps(bound)
     assert bind_default_local_draft_profile(
         target,
@@ -674,6 +797,7 @@ def test_existing_exact_profile_wins_over_a_different_default(
     set_default_local_draft_profile(
         "nfl",
         "111",
+        scoring_format="PPR",
         profile_path=profile_path,
         defaults_path=defaults_path,
     )
@@ -687,6 +811,7 @@ def test_existing_exact_profile_wins_over_a_different_default(
     assert load_local_draft_profile(
         draft_identity("222", "9"), profile_path
     ) == saved_existing
+    assert "scoringFormat" not in saved_existing["leagueSettings"]
 
 
 def test_default_store_permissions_and_custom_parent_policy(

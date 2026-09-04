@@ -117,6 +117,30 @@ test('sends only the allowlisted authoritative-capture blocker', () => {
   assert.equal(repaired.captureBlocked, undefined);
 });
 
+test('sends only an exact allowlisted authoritative ledger proof', () => {
+  const session = {
+    sport: 'f1',
+    leagueId: '123',
+    teamId: '6',
+    sessionKey: 'f1:123',
+    updatedAt: '2026-08-31T22:44:58.255Z',
+    picks: [],
+  };
+
+  assert.equal(
+    sessionToAgentContext({ ...session, ledgerProof: 'round-by-round' }).ledgerProof,
+    'round-by-round',
+  );
+  assert.equal(
+    sessionToAgentContext({ ...session, ledgerProof: 'private page text' }).ledgerProof,
+    undefined,
+  );
+  assert.equal(
+    sessionToAgentContext({ ...session, ledgerProof: { source: 'round-by-round' } }).ledgerProof,
+    undefined,
+  );
+});
+
 test('emits only literal boolean capture states and preserves tri-state semantics', () => {
   const session = {
     sport: 'f1',

@@ -38,6 +38,20 @@
     return result;
   }
 
+  async function blockForDraftIdentityConflict(lease) {
+    const saved = await leaseAwait(
+      lease,
+      () => draftStorage.getSession(metadata.sessionKey),
+    );
+    if (!saved || YahooDraftSessionStore.sameDraftIdentity(saved, metadata)) return null;
+    const error = 'Saved draft state belongs to a different Yahoo team for this league. Open that exact draft tab and reset it before recording this team.';
+    diagnostics.syncStatus = 'blocked-identity-conflict';
+    diagnostics.syncError = error;
+    diagnostics.authoritativeLedgerError = error;
+    diagnostics.recordedCount = saved?.picks?.length || 0;
+    return { ...diagnostics, ok: false, error };
+  }
+
   async function blockForPendingReset(lease) {
     const pending = await leaseAwait(
       lease,
@@ -99,6 +113,13 @@
 
   async function syncSession(session, options = {}, lease) {
     const isRepair = options.repair === true;
+    if (!YahooDraftSessionStore.sameDraftIdentity(session, metadata)) {
+      const error = 'Draft sync was blocked because the saved state belongs to a different Yahoo team.';
+      diagnostics.syncStatus = 'blocked-identity-conflict';
+      diagnostics.syncError = error;
+      if (options.requireSuccess) throw new Error(error);
+      return null;
+    }
     const resetBlock = await blockForPendingReset(lease);
     if (resetBlock) {
       if (options.requireSuccess) throw new Error(resetBlock.error);
@@ -117,7 +138,13 @@
       diagnostics.syncError = 'A durable repair is pending reconciliation; ordinary sync is blocked.';
       return null;
     }
-    const signature = JSON.stringify([session.sessionKey, session.picks, isRepair, session.authoritativeCaptureBlocked]);
+    const signature = JSON.stringify([
+      session.sessionKey,
+      session.picks,
+      isRepair,
+      session.authoritativeCaptureBlocked,
+      session.ledgerProof,
+    ]);
     const now = Date.now();
     if (!options.requireSuccess && signature === lastSyncedSignature && diagnostics.syncStatus === 'connected') return;
     if (!options.requireSuccess && signature === lastSyncedSignature && now - lastSyncAttemptAt < 10000) return;
@@ -155,6 +182,7 @@
 
   function repairCoordinatorForLease(lease) {
     return YahooDraftSessionStore.createDurableRepairCoordinator({
+      expectedIdentity: metadata,
       readPending: () => leaseAwait(
         lease,
         () => draftStorage.getPendingRepair(metadata.sessionKey),
@@ -217,6 +245,8 @@
 
   async function performScan(lease) {
     lease?.throwIfLost?.();
+    const identityBlock = await blockForDraftIdentityConflict(lease);
+    if (identityBlock) return identityBlock;
     const resetBlock = await blockForPendingReset(lease);
     if (resetBlock) return resetBlock;
     const oldTabBlock = await blockForPreResetTab(lease);
@@ -267,6 +297,10 @@
     );
     let updated;
     let automaticBlockError = null;
+    const hasCurrentPickEvidence = Number.isInteger(authoritativeResult.currentPickNumber) &&
+      authoritativeResult.currentPickNumber > 0;
+    const hasSecondaryEvidence = picks.length > 0;
+    const hasAuthoritativeTableEvidence = authoritativeResult.scan?.tableCount > 0;
     if (authoritativeEvaluation.authoritativePicks) {
       const automaticUpdate = YahooDraftSessionStore.prepareAutomaticAuthoritativeUpdate(
         existing,
@@ -280,7 +314,10 @@
         diagnostics.recordedCount = existing?.picks?.length || 0;
         diagnostics.authoritativeLedgerError = automaticUpdate.error;
         diagnostics.syncError = automaticUpdate.error;
-        if (automaticUpdate.reason === 'downward-prefix') {
+        if (automaticUpdate.reason === 'identity-conflict') {
+          diagnostics.syncStatus = 'blocked-identity-conflict';
+          return { ...diagnostics, ok: false, error: automaticUpdate.error };
+        } else if (automaticUpdate.reason === 'downward-prefix') {
           diagnostics.syncStatus = 'blocked-authoritative-prefix';
           automaticBlockError = automaticUpdate.error;
           updated = YahooDraftSessionStore.setAuthoritativeCaptureBlocked(
@@ -302,6 +339,46 @@
       } else {
         updated = automaticUpdate.session;
       }
+    } else if (
+      !hasCurrentPickEvidence &&
+      !hasSecondaryEvidence &&
+      !hasAuthoritativeTableEvidence
+    ) {
+      automaticBlockError = 'No Yahoo draft ledger, current-pick marker, or drafted-player observation was visible. Recommendations remain blocked until draft evidence returns.';
+      diagnostics.authoritativeLedgerError = automaticBlockError;
+      diagnostics.syncStatus = 'blocked-no-evidence';
+      diagnostics.syncError = automaticBlockError;
+      updated = YahooDraftSessionStore.blockDraftSessionForNoEvidence(
+        existing,
+        metadata,
+        now,
+      );
+    } else if (
+      hasCurrentPickEvidence &&
+      !hasSecondaryEvidence &&
+      !hasAuthoritativeTableEvidence
+    ) {
+      const currentPickUpdate = YahooDraftSessionStore.prepareCurrentPickOnlyUpdate(
+        existing,
+        metadata,
+        authoritativeResult.currentPickNumber,
+        now,
+      );
+      updated = currentPickUpdate.session;
+      if (!currentPickUpdate.ok) {
+        automaticBlockError = currentPickUpdate.error;
+        diagnostics.authoritativeLedgerError = currentPickUpdate.error;
+        diagnostics.syncStatus = 'blocked-current-pick-mismatch';
+        diagnostics.syncError = currentPickUpdate.error;
+      }
+    } else if (!hasSecondaryEvidence) {
+      updated = authoritativeEvaluation.error
+        ? YahooDraftSessionStore.blockDraftSessionForNoEvidence(existing, metadata, now)
+        : existing || YahooDraftSessionStore.blockDraftSessionForNoEvidence(
+          undefined,
+          metadata,
+          now,
+        );
     } else {
       updated = YahooDraftSessionStore.updateDraftSessionFromSecondaryObservations(
         existing,
@@ -324,7 +401,8 @@
       (existing?.authoritativeCaptureBlocked === false) !==
         (updated.authoritativeCaptureBlocked === false) ||
       (existing?.numberedLedgerAuthoritative === true) !==
-        (updated.numberedLedgerAuthoritative === true)
+        (updated.numberedLedgerAuthoritative === true) ||
+      existing?.ledgerProof !== updated.ledgerProof
     ) {
       await leaseAwait(
         lease,
@@ -341,6 +419,8 @@
 
   async function performRepair(lease) {
     lease?.throwIfLost?.();
+    const identityBlock = await blockForDraftIdentityConflict(lease);
+    if (identityBlock) return identityBlock;
     const resetBlock = await blockForPendingReset(lease);
     if (resetBlock) return resetBlock;
     const oldTabBlock = await blockForPreResetTab(lease);

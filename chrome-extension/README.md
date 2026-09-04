@@ -54,7 +54,7 @@ Follow this order for each live draft or Yahoo mock:
 8. Open Firefox's **Draft Assistant** sidebar or remain in the dashboard. Live recommendation refresh starts automatically; **Refresh recommendations** remains available for an immediate manual run.
 9. When diagnosing any recommendation, inspect live draft state before requesting a next pick.
 
-The smaller Yahoo last-pick banner and the active Yahoo **Picks** tab continue supplying new observations while other draft panels are visible. DOM bursts use a 400 ms quiet window, continuous changes force a scan after about one second, and mutations during an active scan produce one serialized replay. Picks-tab capture accepts only strict, currently rendered numbered cards from the semantic Queue/Picks tab control; Queue entries are ignored. It never scrolls the panel automatically; virtualized windows accumulate as Yahoo renders them and on manual rescan. Return to **Results → Round by Round** and rescan when anything looks incomplete; its numbered table remains the only authoritative ledger and repair source.
+The smaller Yahoo last-pick banner and the active Yahoo **Picks** tab continue supplying new observations while other draft panels are visible. DOM bursts use a 400 ms quiet window, continuous changes force a scan after about one second, and mutations during an active scan produce one serialized replay. Picks-tab capture accepts only strict, currently rendered numbered cards from the semantic Queue/Picks tab control; Queue entries are ignored. It never scrolls the panel automatically; virtualized windows accumulate as Yahoo renders them and on manual rescan. Return to **Results → Round by Round** and rescan when anything looks incomplete; its numbered table remains the only authoritative ledger and repair source. The extension sends a small exact `round-by-round` proof only after that source is verified. Before any player is selected, the empty table is usable only with a stable Yahoo current-pick marker showing pick 1. If an active scan sees no ledger, current-pick marker, or drafted-player observation, it syncs one integrity blocker; repeating the same empty scan does not advance the saved state time. Sessions created by older extension builds have no proof and remain blocked until a current authoritative rescan.
 
 ## What is recorded
 
@@ -112,14 +112,14 @@ Importing a profile is the recommended live-draft path when Yahoo has not approv
 
 1. Open and scan the target draft first.
 2. Open **Full dashboard** from its popup.
-3. Confirm the league ID, team count, and roster slots.
+3. Confirm the league ID, team count, roster slots, and explicit Standard, Half PPR, or PPR selection.
 4. Choose one supported local file:
    - DraftSheets 2026 `.xlsx`, up to 2 MB
    - ECR `.csv` with Rank/ECR, Player Name, and Position; Team, ADP, and Bye are optional
    - Strict `schemaVersion: 1` `.json`
 5. Select **Import profile**. Recommendations refresh automatically after the exact profile is saved; the manual refresh button remains available.
 
-The server keeps only the top 500 sanitized rows, roster settings, and safe provenance for that exact sport/league/team/session identity. Raw workbook bytes are parsed in memory and discarded. Filenames, formulas, notes, URLs, and arbitrary cells are not stored.
+The server keeps only the top 500 sanitized rows, roster settings, the exact selected scoring format, and safe provenance for that exact sport/league/team/session identity. The visible scoring selector overrides any workbook-inferred label. Raw workbook bytes are parsed in memory and discarded. Filenames, formulas, notes, URLs, and arbitrary cells are not stored. Older profiles without a scoring format remain readable and are labeled **Scoring not set** until explicitly reimported or reused.
 
 Generic CSV and strict JSON may also supply optional, explicit Breakout Watch evidence for RB/WR/TE players. CSV uses the six all-or-none columns `Projection Source`, `Projection As Of` (or `Projection Date`), `Projected Points`, `Projected Opportunities`, `Opportunity Kind`, and `Experience Years`; JSON uses the equivalent complete `breakout_evidence` object. RB uses projected `touches`; WR/TE may use projected `targets` or `receptions`. The source must be a safe attribution label rather than a URL, and the evidence date must match the profile season. DraftSheets `.xlsx` does not import these optional fields.
 
@@ -137,10 +137,10 @@ Each newly created mock has a new identity. To reuse rankings without uploading 
 
 1. Open and scan the new mock.
 2. Open **Full dashboard** from the new mock's popup.
-3. Under **Reuse a saved profile**, explicitly choose the prior source.
+3. Under **Reuse a saved profile**, explicitly choose the prior source and scoring format.
 4. Select **Use for this draft & refresh**.
 
-For repeated mocks, the dashboard's **Default for future drafts** form can store one explicit saved source per sport. A first recommendation for a new profileless recorder identity binds that source before Yahoo fallback. Existing exact profiles always win, changing or clearing the default affects only future unbound drafts, and the server copies only sanitized rankings, roster settings, and provenance—never picks. The source must match the current UTC year when selected and when bound; replace or clear it after a season rollover.
+For repeated mocks, the dashboard's **Default for future drafts** form can store one explicit saved source and scoring override per sport. A first recommendation for a new profileless recorder identity binds that source with the selected scoring before Yahoo fallback. Existing exact profiles always win, changing or clearing the default affects only future unbound drafts, and the server copies only sanitized rankings, roster settings, scoring, and provenance—never picks. An older scoring-less default can be upgraded by selecting the same source, choosing scoring, and saving it again; this changes only the private default pointer. The source must match the current UTC year when selected and when bound; replace or clear it after a season rollover.
 
 Yahoo uses the same draft-client URL shape for mocks and real drafts, so the extension cannot safely infer mock status without retaining unreliable page data. The sport default therefore applies to future profileless real drafts as well as mocks. The dashboard labels that scope; keep manual binding if your Yahoo leagues use different settings.
 
@@ -158,6 +158,8 @@ Use Reset when starting the same exact mock over:
 4. Wait for the popup to rescan after the server's reset timestamp.
 
 The reset clears only that exact browser/server draft session and preserves its separate imported profile. If the server reports that the draft changed, no deletion occurs; rescan and confirm Reset again. Reset is disabled when the popup can show only a saved/latest draft instead of the exact active identity.
+
+The recorder also validates the Yahoo team ID, not just sport and league. If the same browser-storage key contains state from a different team, automatic scans, sync, and pending repair replay stop without changing either session. Open the original team's exact draft tab and reset it before recording the other team; the recorder never reclassifies the old team's picks or roster as the active team's state.
 
 ### Full rescan & repair
 

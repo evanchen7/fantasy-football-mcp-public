@@ -55,6 +55,7 @@
       schemaVersion: 1,
       source: 'yahoo-draft-recorder',
       ...(options.repair === true ? { repair: true } : {}),
+      ...(session?.ledgerProof === 'round-by-round' ? { ledgerProof: 'round-by-round' } : {}),
       ...(
         options.repair !== true && typeof session?.authoritativeCaptureBlocked === 'boolean'
           ? { captureBlocked: session.authoritativeCaptureBlocked }

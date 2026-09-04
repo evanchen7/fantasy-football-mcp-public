@@ -12,9 +12,11 @@
   const profileForm = document.getElementById('draft-profile-form');
   const profileReuseForm = document.getElementById('draft-profile-reuse-form');
   const profileSourceLeague = document.getElementById('profile-source-league');
+  const profileReuseScoring = document.getElementById('profile-reuse-scoring-format');
   const profileDefaultForm = document.getElementById('draft-profile-default-form');
   const profileDefaultSport = document.getElementById('profile-default-sport');
   const profileDefaultSource = document.getElementById('profile-default-source');
+  const profileDefaultScoring = document.getElementById('profile-default-scoring-format');
   const leagueInput = document.getElementById('league-id');
   const liveRefreshToggle = document.getElementById('live-refresh');
   const requestStatus = document.getElementById('request-status');
@@ -157,6 +159,7 @@
     return {
       teams: document.getElementById('profile-team-count').value,
       rosterPositions: selectedRosterPositions(),
+      scoringFormat: document.getElementById('profile-scoring-format').value,
     };
   }
 
@@ -213,9 +216,14 @@
       !savedProfilesLoaded ||
       !validLeagueId(leagueId) ||
       Boolean(profileForSelectedLeague());
+    profileReuseScoring.disabled = profileControlsBusy ||
+      !savedProfilesLoaded ||
+      !validLeagueId(leagueId) ||
+      Boolean(profileForSelectedLeague());
     document.getElementById('reuse-profile-button').disabled = profileControlsBusy ||
       Boolean(profileForSelectedLeague()) ||
-      !validSource;
+      !validSource ||
+      !['STD', 'HALF', 'PPR'].includes(profileReuseScoring.value);
   }
 
   function updateProfileDefaultControls() {
@@ -231,9 +239,16 @@
     profileDefaultSource.disabled = profileControlsBusy ||
       !savedProfilesLoaded ||
       !sport;
+    profileDefaultScoring.disabled = profileControlsBusy ||
+      !savedProfilesLoaded ||
+      !sport;
     document.getElementById('set-profile-default-button').disabled = profileControlsBusy ||
       !validSource ||
-      currentDefault?.sourceLeagueId === sourceLeagueId;
+      !['STD', 'HALF', 'PPR'].includes(profileDefaultScoring.value) ||
+      (
+        currentDefault?.sourceLeagueId === sourceLeagueId &&
+        currentDefault?.scoringFormat === profileDefaultScoring.value
+      );
     document.getElementById('clear-profile-default-button').disabled = profileControlsBusy ||
       !currentDefault;
   }
@@ -263,6 +278,8 @@
     profileSourceLeague.value = choices.some((profile) => profile.leagueId === previousValue)
       ? previousValue
       : '';
+    const selected = choices.find((profile) => profile.leagueId === profileSourceLeague.value);
+    profileReuseScoring.value = selected?.scoringFormat || 'HALF';
     updateProfileReuseControls();
   }
 
@@ -295,6 +312,10 @@
         ? previousValue
         : '';
     }
+    const selected = choices.find((profile) => profile.leagueId === profileDefaultSource.value);
+    profileDefaultScoring.value = currentDefault?.sourceLeagueId === selected?.leagueId
+      ? (currentDefault.scoringFormat || selected?.scoringFormat || 'HALF')
+      : (selected?.scoringFormat || 'HALF');
     updateProfileDefaultControls();
   }
 
@@ -323,10 +344,14 @@
       const freshness = profileClient.describeProfileFreshness(
         sourceProfile.asOf || sourceProfile.importedAt,
       );
+      const scoringLabel = profileClient.profileScoringLabel(currentDefault.scoringFormat);
+      const scoringDetail = currentDefault.scoringFormat
+        ? `${scoringLabel} scoring is explicit.`
+        : 'Scoring is not explicit; choose Standard, Half PPR, or PPR and save this default again.';
       setProfileDefaultStatus(
         `${profileClient.profileSportLabel(sport)} default: League ${sourceProfile.leagueId}`,
-        `${freshness.label}. This profile will be copied only to future profileless Yahoo drafts for this sport, including real drafts and mocks. Existing exact profiles win, and picks are never copied.`,
-        freshness.kind,
+        `${freshness.label}. ${scoringDetail} This profile will be copied only to future profileless Yahoo drafts for this sport, including real drafts and mocks. Existing exact profiles win, and picks are never copied.`,
+        currentDefault.scoringFormat ? freshness.kind : 'unknown',
       );
       return;
     }
@@ -365,9 +390,10 @@
     const leagueId = leagueInput.value.trim();
     const selectedProfile = profileForSelectedLeague();
     if (selectedProfile) {
+      const scoringLabel = profileClient.profileScoringLabel(selectedProfile.scoringFormat);
       setProfileStatus(
         `${profileFormatLabel(selectedProfile.format)} profile ready`,
-        `${selectedProfile.rankingCount} ranked players bound to league ${leagueId}.`,
+        `${selectedProfile.rankingCount} ranked players bound to league ${leagueId} · ${scoringLabel}.`,
         profileClient.describeProfileFreshness(selectedProfile.asOf),
       );
     } else if (savedProfiles.length && validLeagueId(leagueId)) {
@@ -1135,7 +1161,10 @@
       { kind: 'loading', label: 'Binding exact draft identity' },
     );
     try {
-      const result = await profileClient.bindDraftProfile(sourceLeagueId, leagueId);
+      const scoringFormat = profileReuseScoring.value;
+      const result = await profileClient.bindDraftProfile(sourceLeagueId, leagueId, {
+        scoringFormat,
+      });
       if (leagueInput.value.trim() !== leagueId) {
         throw new Error('League selection changed during profile reuse; no recommendation was requested.');
       }
@@ -1143,7 +1172,7 @@
       const rankingCount = safeResponseCount(result.rankingCount, sourceProfile.rankingCount);
       setProfileStatus(
         'Saved profile ready for this draft',
-        `${rankingCount} ranked players and league settings copied from league ${sourceLeagueId} to league ${leagueId}. Recorded picks stayed with league ${leagueId}.`,
+        `${rankingCount} ranked players and league settings copied from league ${sourceLeagueId} to league ${leagueId} with ${profileClient.profileScoringLabel(scoringFormat)} scoring. Recorded picks stayed with league ${leagueId}.`,
         profileClient.describeProfileFreshness(result.asOf || sourceProfile.asOf),
       );
       shouldRefresh = true;
@@ -1172,6 +1201,7 @@
     if (!profileDefaultForm.reportValidity()) return;
     const sport = profileDefaultSport.value;
     const sourceLeagueId = profileDefaultSource.value;
+    const scoringFormat = profileDefaultScoring.value;
     const sourceProfile = savedProfiles.find((profile) => (
       profile.sport === sport && profile.leagueId === sourceLeagueId
     ));
@@ -1192,14 +1222,16 @@
       'loading',
     );
     try {
-      await profileClient.setDefaultDraftProfile(sport, sourceLeagueId);
+      await profileClient.setDefaultDraftProfile(sport, sourceLeagueId, {
+        scoringFormat,
+      });
       await loadSavedProfiles();
       const freshness = profileClient.describeProfileFreshness(
         sourceProfile.asOf || sourceProfile.importedAt,
       );
       setProfileDefaultStatus(
         `${profileClient.profileSportLabel(sport)} default saved`,
-        `${freshness.label}. League ${sourceLeagueId} will apply to future profileless Yahoo drafts, including real drafts and mocks. Existing exact profiles win, and picks are never copied.`,
+        `${freshness.label}. League ${sourceLeagueId} with ${profileClient.profileScoringLabel(scoringFormat)} scoring will apply to future profileless Yahoo drafts, including real drafts and mocks. Existing exact profiles win, and picks are never copied.`,
         freshness.kind,
       );
     } catch (error) {
@@ -1227,7 +1259,9 @@
       'loading',
     );
     try {
-      await profileClient.setDefaultDraftProfile(sport, null);
+      await profileClient.setDefaultDraftProfile(sport, null, {
+        scoringFormat: null,
+      });
       await loadSavedProfiles();
       setProfileDefaultStatus(
         `${profileClient.profileSportLabel(sport)} default cleared`,
@@ -1306,6 +1340,7 @@
       const detailParts = [
         rankingCount ? `${rankingCount} ranked players` : 'Ranked players saved',
         `bound to league ${leagueId}`,
+        `${profileClient.profileScoringLabel(selectedLeagueSettings().scoringFormat)} scoring`,
       ];
       if (truncatedCount) detailParts.push(`top 500 retained; ${truncatedCount} lower ranks omitted`);
       const freshness = profileClient.describeProfileFreshness(result.asOf || asOf);
@@ -1407,12 +1442,27 @@
     await refreshAnalysis(leagueId);
   });
 
-  profileSourceLeague.addEventListener('change', updateProfileReuseControls);
+  profileSourceLeague.addEventListener('change', () => {
+    const source = savedProfiles.find((profile) => (
+      profile.leagueId === profileSourceLeague.value
+    ));
+    profileReuseScoring.value = source?.scoringFormat || 'HALF';
+    updateProfileReuseControls();
+  });
+  profileReuseScoring.addEventListener('change', updateProfileReuseControls);
   profileDefaultSport.addEventListener('change', () => {
     renderProfileDefaultSourceChoices();
     showProfileDefaultStatus();
   });
-  profileDefaultSource.addEventListener('change', updateProfileDefaultControls);
+  profileDefaultSource.addEventListener('change', () => {
+    const source = savedProfiles.find((profile) => (
+      profile.sport === profileDefaultSport.value &&
+      profile.leagueId === profileDefaultSource.value
+    ));
+    profileDefaultScoring.value = source?.scoringFormat || 'HALF';
+    updateProfileDefaultControls();
+  });
+  profileDefaultScoring.addEventListener('change', updateProfileDefaultControls);
   leagueInput.addEventListener('input', () => {
     cancelActiveAnalysis();
     resetAnalysisPanels();

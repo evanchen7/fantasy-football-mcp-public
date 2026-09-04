@@ -8,6 +8,8 @@ const {
   createDurableRepairCoordinator,
   createDurableResetCoordinator,
   prepareAutomaticAuthoritativeUpdate,
+  blockDraftSessionForNoEvidence,
+  prepareCurrentPickOnlyUpdate,
   repairDraftSession,
   sameDraftIdentity,
   updateDraftSessionFromSecondaryObservations,
@@ -18,11 +20,96 @@ const {
 const RESET_METADATA = {
   sport: 'f1', leagueId: '10547893', teamId: '6', sessionKey: 'f1:10547893',
 };
+const REPAIR_METADATA = {
+  sport: 'f1', leagueId: 'league-a', teamId: '1', sessionKey: 'f1:league-a',
+};
 
 test('exact active draft identity includes team ID, not only sport and league', () => {
   assert.equal(sameDraftIdentity(RESET_METADATA, { ...RESET_METADATA }), true);
   assert.equal(sameDraftIdentity(RESET_METADATA, { ...RESET_METADATA, teamId: '7' }), false);
   assert.equal(sameDraftIdentity(RESET_METADATA, { ...RESET_METADATA, sessionKey: 'f1:other' }), false);
+});
+
+test('team identity collision cannot reuse picks, proof, or roster as an eligible active session', () => {
+  const savedTeamSix = {
+    sport: 'f1',
+    leagueId: '123',
+    teamId: '6',
+    sessionKey: 'f1:123',
+    numberedLedgerAuthoritative: true,
+    ledgerProof: 'round-by-round',
+    authoritativeCaptureBlocked: false,
+    picks: [{
+      pickNumber: 1,
+      player: 'Saved Team Six Player',
+      fantasyTeam: 'Your Team',
+      isUserPick: true,
+    }],
+    updatedAt: '2026-09-01T00:00:00.000Z',
+  };
+  const activeTeamNine = { ...savedTeamSix, teamId: '9', picks: undefined };
+
+  const currentPickOnly = prepareCurrentPickOnlyUpdate(
+    savedTeamSix,
+    activeTeamNine,
+    1,
+    '2026-09-01T00:01:00.000Z',
+  );
+  const emptyAuthoritative = prepareAutomaticAuthoritativeUpdate(
+    savedTeamSix,
+    activeTeamNine,
+    [],
+    [],
+    '2026-09-01T00:01:00.000Z',
+    { currentPickNumber: 1 },
+  );
+  const repair = repairDraftSession(
+    savedTeamSix,
+    activeTeamNine,
+    [{ pickNumber: 1, player: 'Active Team Nine Player' }],
+    '2026-09-01T00:01:00.000Z',
+  );
+
+  for (const result of [currentPickOnly, emptyAuthoritative, repair]) {
+    assert.equal(result.ok, false);
+    assert.equal(result.reason, 'identity-conflict');
+    assert.equal(result.session, savedTeamSix);
+    assert.match(result.error, /different Yahoo team/i);
+  }
+  assert.equal(savedTeamSix.teamId, '6');
+  assert.equal(savedTeamSix.ledgerProof, 'round-by-round');
+  assert.equal(savedTeamSix.picks[0].player, 'Saved Team Six Player');
+  assert.throws(
+    () => updateDraftSession(savedTeamSix, activeTeamNine, [], '2026-09-01T00:01:00.000Z'),
+    /different Yahoo team/i,
+  );
+  assert.throws(
+    () => blockDraftSessionForNoEvidence(
+      savedTeamSix,
+      activeTeamNine,
+      '2026-09-01T00:01:00.000Z',
+    ),
+    /different Yahoo team/i,
+  );
+  assert.throws(
+    () => updateDraftSessionFromSecondaryObservations(
+      savedTeamSix,
+      activeTeamNine,
+      [],
+      '2026-09-01T00:01:00.000Z',
+    ),
+    /different Yahoo team/i,
+  );
+  assert.throws(
+    () => updateDraftSessionFromAuthoritativeLedger(
+      savedTeamSix,
+      activeTeamNine,
+      [],
+      [],
+      '2026-09-01T00:01:00.000Z',
+    ),
+    /different Yahoo team/i,
+  );
 });
 
 function resetHarness(overrides = {}) {
@@ -326,6 +413,139 @@ test('automatic authoritative scan may advance the saved ledger', () => {
 
   assert.equal(result.ok, true);
   assert.equal(result.session.picks.at(-1).pickNumber, 21);
+  assert.equal(result.session.ledgerProof, 'round-by-round');
+});
+
+test('fresh no-evidence scan creates a blocked session and repeated scans do not refresh it', () => {
+  const metadata = { sport: 'f1', leagueId: 'league-a', teamId: '1', sessionKey: 'f1:league-a' };
+  const first = blockDraftSessionForNoEvidence(
+    undefined,
+    metadata,
+    '2026-08-01T00:01:00.000Z',
+  );
+  const repeated = blockDraftSessionForNoEvidence(
+    first,
+    metadata,
+    '2026-08-01T00:02:00.000Z',
+  );
+
+  assert.equal(first.authoritativeCaptureBlocked, true);
+  assert.equal(first.ledgerProof, undefined);
+  assert.deepEqual(first.picks, []);
+  assert.equal(first.updatedAt, '2026-08-01T00:01:00.000Z');
+  assert.equal(repeated, first);
+  assert.equal(repeated.updatedAt, '2026-08-01T00:01:00.000Z');
+});
+
+test('no-evidence scan blocks a proven ledger once without repeatedly refreshing it', () => {
+  const metadata = { sport: 'f1', leagueId: 'league-a', teamId: '1', sessionKey: 'f1:league-a' };
+  const existing = {
+    ...metadata,
+    ledgerProof: 'round-by-round',
+    authoritativeCaptureBlocked: false,
+    picks: [{ pickNumber: 1, player: 'Player 1' }],
+    updatedAt: '2026-08-01T00:00:00.000Z',
+  };
+  const blocked = blockDraftSessionForNoEvidence(
+    existing,
+    metadata,
+    '2026-08-01T00:01:00.000Z',
+  );
+  const repeated = blockDraftSessionForNoEvidence(
+    blocked,
+    metadata,
+    '2026-08-01T00:02:00.000Z',
+  );
+
+  assert.equal(blocked.authoritativeCaptureBlocked, true);
+  assert.equal(blocked.ledgerProof, 'round-by-round');
+  assert.equal(blocked.updatedAt, '2026-08-01T00:01:00.000Z');
+  assert.equal(repeated, blocked);
+});
+
+test('verified empty Round-by-Round at pick one establishes explicit proof', () => {
+  const metadata = { sport: 'f1', leagueId: 'league-a', teamId: '1', sessionKey: 'f1:league-a' };
+  const result = prepareAutomaticAuthoritativeUpdate(
+    undefined,
+    metadata,
+    [],
+    [],
+    '2026-08-01T00:01:00.000Z',
+    { currentPickNumber: 1 },
+  );
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.session.picks, []);
+  assert.equal(result.session.ledgerProof, 'round-by-round');
+  assert.equal(result.session.authoritativeCaptureBlocked, false);
+});
+
+test('current-pick-only evidence must match the proven saved ledger exactly', () => {
+  const metadata = { sport: 'f1', leagueId: 'league-a', teamId: '1', sessionKey: 'f1:league-a' };
+  const verifiedPickOne = prepareAutomaticAuthoritativeUpdate(
+    undefined,
+    metadata,
+    [],
+    [],
+    '2026-08-01T00:01:00.000Z',
+    { currentPickNumber: 1 },
+  ).session;
+
+  const matching = prepareCurrentPickOnlyUpdate(
+    verifiedPickOne,
+    metadata,
+    1,
+    '2026-08-01T00:02:00.000Z',
+  );
+  const advancedWithoutLedger = prepareCurrentPickOnlyUpdate(
+    verifiedPickOne,
+    metadata,
+    2,
+    '2026-08-01T00:02:00.000Z',
+  );
+
+  assert.equal(matching.ok, true);
+  assert.equal(matching.session, verifiedPickOne);
+  assert.equal(advancedWithoutLedger.ok, false);
+  assert.equal(advancedWithoutLedger.session.authoritativeCaptureBlocked, true);
+  assert.equal(advancedWithoutLedger.session.updatedAt, '2026-08-01T00:02:00.000Z');
+  assert.match(advancedWithoutLedger.error, /current pick 2.*saved ledger expects pick 1/i);
+});
+
+test('current-pick-only evidence cannot establish authoritative proof', () => {
+  const metadata = { sport: 'f1', leagueId: 'league-a', teamId: '1', sessionKey: 'f1:league-a' };
+  const result = prepareCurrentPickOnlyUpdate(
+    undefined,
+    metadata,
+    1,
+    '2026-08-01T00:01:00.000Z',
+  );
+
+  assert.equal(result.ok, false);
+  assert.equal(result.session.authoritativeCaptureBlocked, true);
+  assert.equal(result.session.ledgerProof, undefined);
+});
+
+test('secondary observations cannot promote a legacy authoritative marker into proof', () => {
+  const metadata = { sport: 'f1', leagueId: 'league-a', teamId: '1', sessionKey: 'f1:league-a' };
+  const legacySession = {
+    ...metadata,
+    numberedLedgerAuthoritative: true,
+    authoritativeCaptureBlocked: false,
+    picks: [{ pickNumber: 1, player: 'Player 1' }],
+    updatedAt: '2026-08-01T00:01:00.000Z',
+  };
+
+  const updated = updateDraftSessionFromSecondaryObservations(
+    legacySession,
+    metadata,
+    [{ pickNumber: 2, player: 'Player 2' }],
+    '2026-08-01T00:02:00.000Z',
+  );
+
+  assert.equal(updated.ledgerProof, undefined);
+  assert.equal(updated.authoritativeCaptureBlocked, true);
+  assert.deepEqual(updated.picks.map((pick) => pick.pickNumber), [1, 2]);
 });
 
 test('same-scan secondary conflicts remain visible after establishing an authoritative baseline', () => {
@@ -515,6 +735,7 @@ test('filling a gap created by an earlier out-of-order panel append remains bloc
   const baseline = {
     ...metadata,
     numberedLedgerAuthoritative: true,
+    ledgerProof: 'round-by-round',
     authoritativeCaptureBlocked: false,
     picks: Array.from({ length: 5 }, (_unused, index) => ({
       pickNumber: index + 1,
@@ -545,6 +766,7 @@ test('strictly next secondary pick after a complete baseline stays unblocked', (
   const existing = {
     ...metadata,
     numberedLedgerAuthoritative: true,
+    ledgerProof: 'round-by-round',
     authoritativeCaptureBlocked: false,
     picks: [
       { pickNumber: 1, player: 'Player 1' },
@@ -600,6 +822,7 @@ test('panel-only capture preserves incompatible same-number observations as dupl
   );
 
   assert.equal(conflicted.numberedLedgerAuthoritative, undefined);
+  assert.equal(conflicted.ledgerProof, undefined);
   assert.equal(conflicted.authoritativeCaptureBlocked, true);
   assert.deepEqual(conflicted.picks.map((pick) => pick.player), ['J. Gibbs', 'P. Nacua']);
   assert.deepEqual(analyzeLedger(conflicted.picks).duplicatePickNumbers, [1]);
@@ -864,8 +1087,11 @@ test('creates a draft session and timestamps newly observed picks', () => {
 });
 
 test('keeps the original timestamp when a later scan enriches a pick', () => {
+  const metadata = {
+    sport: 'f1', leagueId: '12345678', teamId: '6', sessionKey: 'f1:12345678',
+  };
   const existing = {
-    sessionKey: 'f1:12345678',
+    ...metadata,
     picks: [
       {
         pickNumber: 1,
@@ -877,7 +1103,7 @@ test('keeps the original timestamp when a later scan enriches a pick', () => {
 
   const session = updateDraftSession(
     existing,
-    { sport: 'f1', leagueId: '12345678', teamId: '6', sessionKey: 'f1:12345678' },
+    metadata,
     [{ pickNumber: 1, player: 'Ja’Marr Chase', position: 'WR' }],
     '2026-08-01T00:01:00.000Z',
   );
@@ -1048,15 +1274,15 @@ test('authoritative scan preserves duplicate rows and gaps in server-bound picks
 });
 
 test('full repair replaces stale picks with a complete authoritative ledger', () => {
+  const metadata = { sport: 'f1', leagueId: '12345678', teamId: '6', sessionKey: 'f1:12345678' };
   const existing = {
-    sessionKey: 'f1:12345678',
+    ...metadata,
     picks: [
       { pickNumber: 1, player: 'Old first pick' },
       { pickNumber: 1, player: 'Duplicate first pick' },
       { player: 'Unnumbered banner pick' },
     ],
   };
-  const metadata = { sport: 'f1', leagueId: '12345678', teamId: '6', sessionKey: 'f1:12345678' };
   const result = repairDraftSession(existing, metadata, [
     { pickNumber: 1, player: 'J. Chase' },
     { pickNumber: 2, player: 'B. Robinson' },
@@ -1067,8 +1293,8 @@ test('full repair replaces stale picks with a complete authoritative ledger', ()
 });
 
 test('full repair refuses a partial ledger and preserves saved picks', () => {
-  const existing = { sessionKey: 'f1:12345678', picks: [{ pickNumber: 1, player: 'Saved pick' }] };
   const metadata = { sport: 'f1', leagueId: '12345678', teamId: '6', sessionKey: 'f1:12345678' };
+  const existing = { ...metadata, picks: [{ pickNumber: 1, player: 'Saved pick' }] };
   const result = repairDraftSession(existing, metadata, [
     { pickNumber: 1, player: 'J. Chase' },
     { pickNumber: 3, player: 'J. Jefferson' },
@@ -1080,8 +1306,9 @@ test('full repair refuses a partial ledger and preserves saved picks', () => {
 });
 
 test('full repair can stage removal of a phantom saved pick', () => {
+  const metadata = { sport: 'f1', leagueId: '12345678', teamId: '6', sessionKey: 'f1:12345678' };
   const existing = {
-    sessionKey: 'f1:12345678',
+    ...metadata,
     picks: [
       { pickNumber: 1, player: 'Saved first pick' },
       { pickNumber: 2, player: 'Saved second pick' },
@@ -1089,7 +1316,6 @@ test('full repair can stage removal of a phantom saved pick', () => {
     ],
     updatedAt: '2026-08-01T00:01:00.000Z',
   };
-  const metadata = { sport: 'f1', leagueId: '12345678', teamId: '6', sessionKey: 'f1:12345678' };
   const result = repairDraftSession(existing, metadata, [
     { pickNumber: 1, player: 'Visible first pick' },
     { pickNumber: 2, player: 'Visible second pick' },
@@ -1105,14 +1331,14 @@ test('full repair can stage removal of a phantom saved pick', () => {
 });
 
 test('failed repair sync leaves the exact saved session unchanged and does not persist', async () => {
+  const metadata = { sport: 'f1', leagueId: '12345678', teamId: '6', sessionKey: 'f1:12345678' };
   const existing = {
-    sessionKey: 'f1:12345678',
+    ...metadata,
     picks: [
       { pickNumber: 1, player: 'Saved first pick' },
       { pickNumber: 2, player: 'Phantom pick' },
     ],
   };
-  const metadata = { sport: 'f1', leagueId: '12345678', teamId: '6', sessionKey: 'f1:12345678' };
   let persistCalls = 0;
 
   const result = await commitDraftRepair(
@@ -1133,8 +1359,8 @@ test('failed repair sync leaves the exact saved session unchanged and does not p
 });
 
 test('successful repair sync completes before local persistence', async () => {
-  const existing = { sessionKey: 'f1:12345678', picks: [{ pickNumber: 2, player: 'Phantom pick' }] };
   const metadata = { sport: 'f1', leagueId: '12345678', teamId: '6', sessionKey: 'f1:12345678' };
+  const existing = { ...metadata, picks: [{ pickNumber: 2, player: 'Phantom pick' }] };
   const operations = [];
 
   const result = await commitDraftRepair(
@@ -1152,11 +1378,11 @@ test('successful repair sync completes before local persistence', async () => {
 });
 
 test('downward repair without live current-pick evidence stops before server sync', async () => {
+  const metadata = { sport: 'f1', leagueId: '12345678', teamId: '6', sessionKey: 'f1:12345678' };
   const existing = {
-    sessionKey: 'f1:12345678',
+    ...metadata,
     picks: [{ pickNumber: 1 }, { pickNumber: 2 }, { pickNumber: 3 }],
   };
-  const metadata = { sport: 'f1', leagueId: '12345678', teamId: '6', sessionKey: 'f1:12345678' };
   let syncCalls = 0;
   let persistCalls = 0;
 
@@ -1179,8 +1405,8 @@ test('downward repair without live current-pick evidence stops before server syn
 
 test('durable accepted repair survives reload and reconciles before another tab scans', async () => {
   let pending = null;
-  let storedSession = { sessionKey: 'f1:league-a', picks: [{ pickNumber: 1 }, { pickNumber: 2 }] };
-  const repaired = { sessionKey: 'f1:league-a', picks: [{ pickNumber: 1 }] };
+  let storedSession = { ...REPAIR_METADATA, picks: [{ pickNumber: 1 }, { pickNumber: 2 }] };
+  const repaired = { ...REPAIR_METADATA, picks: [{ pickNumber: 1 }] };
   const operations = [];
   let persistAttempts = 0;
   const dependencies = {
@@ -1197,7 +1423,7 @@ test('durable accepted repair survives reload and reconciles before another tab 
   };
 
   const firstTab = createDurableRepairCoordinator(dependencies);
-  await firstTab.begin('f1:league-a', repaired);
+  await firstTab.begin(REPAIR_METADATA.sessionKey, repaired);
   const firstResult = await firstTab.reconcile();
   assert.equal(firstResult.ok, false);
   assert.equal(pending.state, 'accepted');
@@ -1279,7 +1505,10 @@ test('durable repair intent suppresses stale work and retries marked sync after 
     persistSession: async () => operations.push('persist'),
   };
   const firstTab = createDurableRepairCoordinator(dependencies);
-  await firstTab.begin('f1:league-a', { sessionKey: 'f1:league-a', picks: [{ pickNumber: 1 }] });
+  await firstTab.begin(
+    REPAIR_METADATA.sessionKey,
+    { ...REPAIR_METADATA, picks: [{ pickNumber: 1 }] },
+  );
 
   const otherTab = createDurableRepairCoordinator(dependencies);
   assert.equal(await otherTab.hasPending(), true);
@@ -1304,7 +1533,10 @@ test('reload safely retries repair when recording server acceptance failed', asy
     persistSession: async () => operations.push('persist'),
   };
   const firstTab = createDurableRepairCoordinator(dependencies);
-  await firstTab.begin('f1:league-a', { sessionKey: 'f1:league-a', picks: [{ pickNumber: 1 }] });
+  await firstTab.begin(
+    REPAIR_METADATA.sessionKey,
+    { ...REPAIR_METADATA, picks: [{ pickNumber: 1 }] },
+  );
 
   const firstResult = await firstTab.reconcile();
   assert.equal(firstResult.ok, false);
@@ -1316,4 +1548,45 @@ test('reload safely retries repair when recording server acceptance failed', asy
   assert.equal(secondResult.ok, true);
   assert.equal(pending, null);
   assert.deepEqual(operations, ['repair-sync', 'repair-sync', 'persist']);
+});
+
+test('durable repair journal cannot cross Yahoo team identity', async () => {
+  const savedTeamSix = {
+    sport: 'f1',
+    leagueId: '123',
+    teamId: '6',
+    sessionKey: 'f1:123',
+    picks: [{ pickNumber: 1, player: 'Saved Team Six Player' }],
+    updatedAt: '2026-09-01T00:00:00.000Z',
+  };
+  const activeTeamNine = { ...savedTeamSix, teamId: '9', picks: undefined };
+  let pending = {
+    schemaVersion: 1,
+    state: 'intent',
+    sessionKey: savedTeamSix.sessionKey,
+    session: savedTeamSix,
+  };
+  let syncCalls = 0;
+  let persistCalls = 0;
+  const coordinator = createDurableRepairCoordinator({
+    expectedIdentity: activeTeamNine,
+    readPending: async () => pending,
+    writePending: async (record) => { pending = record; },
+    clearPending: async () => { pending = null; },
+    syncRepair: async () => { syncCalls += 1; },
+    persistSession: async () => { persistCalls += 1; },
+  });
+
+  const result = await coordinator.reconcile();
+
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, 'identity-conflict');
+  assert.match(result.error, /different Yahoo team/i);
+  assert.equal(syncCalls, 0);
+  assert.equal(persistCalls, 0);
+  assert.equal(pending.session.teamId, '6');
+  await assert.rejects(
+    coordinator.begin(activeTeamNine.sessionKey, savedTeamSix),
+    /different Yahoo team/i,
+  );
 });
