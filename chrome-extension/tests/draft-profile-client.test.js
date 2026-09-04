@@ -14,12 +14,42 @@ const {
   parseDraftProfileFile,
   parseRosterPositions,
   profileChoiceLabel,
+  profileDefaultScoringSelection,
   profileScoringLabel,
   profileSportLabel,
   saveDraftProfile,
   saveDraftProfileXlsx,
   setDefaultDraftProfile,
 } = require('../../src/dashboard/draft-profile-client.js');
+
+test('profile default scoring selection is safe before load and for legacy defaults', () => {
+  assert.equal(profileDefaultScoringSelection(null, null), 'HALF');
+
+  const legacyDefault = { sport: 'f1', sourceLeagueId: '10557704' };
+  const legacySource = { leagueId: '10557704' };
+  assert.equal(profileDefaultScoringSelection(legacyDefault, null), 'HALF');
+  assert.equal(profileDefaultScoringSelection(legacyDefault, legacySource), 'HALF');
+  assert.notEqual(legacyDefault.scoringFormat, 'HALF');
+
+  assert.equal(
+    profileDefaultScoringSelection(legacyDefault, {
+      leagueId: '10557704',
+      scoringFormat: 'PPR',
+    }),
+    'PPR',
+  );
+  assert.equal(
+    profileDefaultScoringSelection({
+      sport: 'f1',
+      sourceLeagueId: '10557704',
+      scoringFormat: 'STD',
+    }, {
+      leagueId: '10557704',
+      scoringFormat: 'PPR',
+    }),
+    'STD',
+  );
+});
 
 test('parses a DraftSheets ECR CSV locally and allowlists ranking fields', () => {
   const source = [
