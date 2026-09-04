@@ -122,7 +122,7 @@ test('capture-only changes participate in sync deduplication and browser persist
 
   assert.match(
     contentSource,
-    /JSON\.stringify\(\[session\.sessionKey, session\.picks, isRepair, session\.authoritativeCaptureBlocked\]\)/,
+    /JSON\.stringify\(\[[\s\S]*session\.sessionKey,[\s\S]*session\.picks,[\s\S]*isRepair,[\s\S]*session\.authoritativeCaptureBlocked,[\s\S]*session\.ledgerProof,[\s\S]*\]\)/,
   );
   assert.match(
     contentSource,
@@ -131,6 +131,24 @@ test('capture-only changes participate in sync deduplication and browser persist
   assert.match(
     contentSource,
     /existing\?\.numberedLedgerAuthoritative === true[\s\S]*updated\.numberedLedgerAuthoritative === true/,
+  );
+});
+
+test('an observation-free scan transitions to an idempotent capture blocker', () => {
+  const contentSource = fs.readFileSync(path.join(__dirname, '..', 'content.js'), 'utf8');
+  const scanStart = contentSource.indexOf('async function performScan(lease)');
+  const scanSource = contentSource.slice(
+    scanStart,
+    contentSource.indexOf('async function performRepair(lease)', scanStart),
+  );
+
+  assert.match(scanSource, /hasCurrentPickEvidence/);
+  assert.match(scanSource, /hasSecondaryEvidence/);
+  assert.match(scanSource, /blockDraftSessionForNoEvidence/);
+  assert.match(scanSource, /prepareCurrentPickOnlyUpdate/);
+  assert.match(
+    contentSource,
+    /session\.ledgerProof/,
   );
 });
 
@@ -181,6 +199,28 @@ test('content blocks scans and sync while a durable reset journal exists', () =>
   assert.match(contentSource, /isSessionReset/);
   assert.match(contentSource, /sport: metadata\.sport/);
   assert.match(contentSource, /teamId: metadata\.teamId/);
+});
+
+test('content fails closed on a saved or pending repair from another Yahoo team', () => {
+  const contentSource = fs.readFileSync(path.join(__dirname, '..', 'content.js'), 'utf8');
+  const popupSource = fs.readFileSync(path.join(__dirname, '..', 'popup.js'), 'utf8');
+  const scanStart = contentSource.indexOf('async function performScan(lease)');
+  const scanSource = contentSource.slice(
+    scanStart,
+    contentSource.indexOf('async function performRepair(lease)', scanStart),
+  );
+  const identityGuard = scanSource.indexOf('blockForDraftIdentityConflict(lease)');
+  const repairReconcile = scanSource.indexOf('repairCoordinator.reconcile()');
+
+  assert.ok(identityGuard > 0);
+  assert.ok(repairReconcile > identityGuard);
+  assert.match(contentSource, /expectedIdentity: metadata/);
+  assert.match(contentSource, /sameDraftIdentity\(session, metadata\)/);
+  assert.match(popupSource, /expectedIdentity/);
+  assert.match(
+    popupSource,
+    /repairCoordinatorFor\(sessionKey, lease, activeDiagnostics\)\.reconcile\(\)/,
+  );
 });
 
 test('content repair uses the extension broker instead of Firefox page-realm Web Locks', () => {

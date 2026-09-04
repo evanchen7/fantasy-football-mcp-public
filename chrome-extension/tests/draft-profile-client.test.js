@@ -14,6 +14,7 @@ const {
   parseDraftProfileFile,
   parseRosterPositions,
   profileChoiceLabel,
+  profileScoringLabel,
   profileSportLabel,
   saveDraftProfile,
   saveDraftProfileXlsx,
@@ -333,6 +334,7 @@ test('uploads bounded XLSX bytes without transmitting its filename', async () =>
   }, '498589', {
     leagueSettings: {
       teams: 12,
+      scoringFormat: 'HALF',
       rosterPositions: parseRosterPositions({
         QB: 1, RB: 2, WR: 2, TE: 1, FLEX: 1, K: 1, DST: 1, BN: 6, IR: 1,
       }),
@@ -341,7 +343,12 @@ test('uploads bounded XLSX bytes without transmitting its filename', async () =>
       captured = { url, options };
       return {
         ok: true,
-        json: async () => ({ status: 'success', leagueId: '498589', rankingCount: 500 }),
+        json: async () => ({
+          status: 'success',
+          leagueId: '498589',
+          rankingCount: 500,
+          scoringFormat: 'HALF',
+        }),
       };
     },
   });
@@ -349,6 +356,7 @@ test('uploads bounded XLSX bytes without transmitting its filename', async () =>
   assert.equal(captured.url, '/draft-profile-xlsx');
   assert.equal(captured.options.headers['X-Fantasy-League-ID'], '498589');
   assert.equal(captured.options.headers['X-Fantasy-Team-Count'], '12');
+  assert.equal(captured.options.headers['X-Fantasy-Scoring-Format'], 'HALF');
   assert.equal(
     captured.options.headers['X-Fantasy-Roster-Positions'],
     'QB=1,RB=2,WR=2,TE=1,FLEX=1,K=1,DST=1,BN=6,IR=1',
@@ -361,6 +369,63 @@ test('uploads bounded XLSX bytes without transmitting its filename', async () =>
   assert.equal(JSON.stringify(captured).includes('private-manager'), false);
   assert.equal(Object.hasOwn(captured.options.headers, 'Content-Disposition'), false);
   assert.equal(result.rankingCount, 500);
+});
+
+test('requires XLSX imports to confirm an explicitly selected scoring format', async () => {
+  const bytes = Uint8Array.from([0x50, 0x4b, 0x03, 0x04, 1]);
+  const file = {
+    size: bytes.byteLength,
+    arrayBuffer: async () => bytes.buffer,
+  };
+  const leagueSettings = {
+    teams: 12,
+    scoringFormat: 'HALF',
+    rosterPositions: [{ position: 'QB', count: 1 }],
+  };
+
+  for (const responseScoringFormat of [undefined, 'PPR']) {
+    await assert.rejects(
+      saveDraftProfileXlsx(file, '498589', {
+        leagueSettings,
+        fetchImpl: async () => ({
+          ok: true,
+          json: async () => ({
+            status: 'success',
+            leagueId: '498589',
+            rankingCount: 500,
+            ...(responseScoringFormat
+              ? { scoringFormat: responseScoringFormat }
+              : {}),
+          }),
+        }),
+      }),
+      /did not match the selected scoring format/i,
+    );
+  }
+});
+
+test('keeps XLSX import confirmation compatible when scoring is truly omitted', async () => {
+  const bytes = Uint8Array.from([0x50, 0x4b, 0x03, 0x04, 1]);
+  const result = await saveDraftProfileXlsx({
+    size: bytes.byteLength,
+    arrayBuffer: async () => bytes.buffer,
+  }, '498589', {
+    leagueSettings: {
+      teams: 12,
+      rosterPositions: [{ position: 'QB', count: 1 }],
+    },
+    fetchImpl: async () => ({
+      ok: true,
+      json: async () => ({
+        status: 'success',
+        leagueId: '498589',
+        rankingCount: 500,
+      }),
+    }),
+  });
+
+  assert.equal(result.rankingCount, 500);
+  assert.equal(Object.hasOwn(result, 'scoringFormat'), false);
 });
 
 test('rejects malformed or oversized XLSX before network access', async () => {
@@ -383,6 +448,32 @@ test('rejects malformed or oversized XLSX before network access', async () => {
   assert.equal(calls, 0);
 });
 
+test('rejects noncanonical scoring values before profile network access', async () => {
+  let calls = 0;
+  const fetchImpl = async () => { calls += 1; };
+  const profile = {
+    leagueId: '498589',
+    format: 'csv',
+    rankings: [{ rank: 1, name: 'Player One', position: 'QB' }],
+    leagueSettings: {
+      teams: 12,
+      scoringFormat: 'half',
+      rosterPositions: [{ position: 'QB', count: 1 }],
+    },
+  };
+
+  assert.throws(() => buildDraftProfileRequest(profile), /scoring format/i);
+  await assert.rejects(
+    bindDraftProfile('10557704', '498589', { scoringFormat: 'half', fetchImpl }),
+    /scoring format/i,
+  );
+  await assert.rejects(
+    setDefaultDraftProfile('f1', '10557704', { scoringFormat: 'half', fetchImpl }),
+    /scoring format/i,
+  );
+  assert.equal(calls, 0);
+});
+
 test('constructs the canonical allowlisted per-league profile request', () => {
   const request = buildDraftProfileRequest({
     leagueId: '498589',
@@ -399,6 +490,7 @@ test('constructs the canonical allowlisted per-league profile request', () => {
     }],
     leagueSettings: {
       teams: 12,
+      scoringFormat: 'HALF',
       rosterPositions: parseRosterPositions({
         QB: 1,
         RB: 2,
@@ -431,6 +523,7 @@ test('constructs the canonical allowlisted per-league profile request', () => {
     }],
     leagueSettings: {
       teams: 12,
+      scoringFormat: 'HALF',
       rosterPositions: [
         { position: 'QB', count: 1 },
         { position: 'RB', count: 2 },
@@ -456,6 +549,7 @@ test('posts only canonical JSON to the same-origin draft-profile route', async (
     rankings: [{ rank: 1, name: 'Player One', position: 'QB' }],
     leagueSettings: {
       teams: 12,
+      scoringFormat: 'PPR',
       rosterPositions: [{ position: 'QB', count: 1 }],
     },
   }, {
@@ -464,7 +558,12 @@ test('posts only canonical JSON to the same-origin draft-profile route', async (
       captured = { url, options };
       return {
         ok: true,
-        json: async () => ({ status: 'success', leagueId: '498589', rankingCount: 1 }),
+        json: async () => ({
+          status: 'success',
+          leagueId: '498589',
+          rankingCount: 1,
+          scoringFormat: 'PPR',
+        }),
       };
     },
   });
@@ -476,7 +575,44 @@ test('posts only canonical JSON to the same-origin draft-profile route', async (
   assert.equal(captured.options.headers['Content-Type'], 'application/json');
   assert.equal(captured.options.headers['X-Fantasy-Draft-UI'], '1');
   assert.equal(Object.hasOwn(JSON.parse(captured.options.body), 'rawFile'), false);
-  assert.deepEqual(result, { status: 'success', leagueId: '498589', rankingCount: 1 });
+  assert.deepEqual(result, {
+    status: 'success',
+    leagueId: '498589',
+    rankingCount: 1,
+    scoringFormat: 'PPR',
+  });
+});
+
+test('requires JSON imports to confirm an explicitly selected scoring format', async () => {
+  const profile = {
+    leagueId: '498589',
+    format: 'json',
+    rankings: [{ rank: 1, name: 'Player One', position: 'QB' }],
+    leagueSettings: {
+      teams: 12,
+      scoringFormat: 'HALF',
+      rosterPositions: [{ position: 'QB', count: 1 }],
+    },
+  };
+
+  for (const responseScoringFormat of [undefined, 'PPR']) {
+    await assert.rejects(
+      saveDraftProfile(profile, {
+        fetchImpl: async () => ({
+          ok: true,
+          json: async () => ({
+            status: 'success',
+            leagueId: '498589',
+            rankingCount: 1,
+            ...(responseScoringFormat
+              ? { scoringFormat: responseScoringFormat }
+              : {}),
+          }),
+        }),
+      }),
+      /did not match the selected scoring format/i,
+    );
+  }
 });
 
 test('lists only safe saved-profile summaries without choosing one', async () => {
@@ -495,6 +631,7 @@ test('lists only safe saved-profile summaries without choosing one', async () =>
             asOf: '2026-08-31',
             format: 'draftsheets-2026',
             rankingCount: 500,
+            scoringFormat: 'HALF',
             teamId: '6',
             rankings: [{ name: 'must not reach the dashboard' }],
           }],
@@ -516,6 +653,7 @@ test('lists only safe saved-profile summaries without choosing one', async () =>
     asOf: '2026-08-31',
     format: 'draftsheets-2026',
     rankingCount: 500,
+    scoringFormat: 'HALF',
   }]);
   assert.equal(JSON.stringify(profiles).includes('private'), false);
   assert.equal(JSON.stringify(profiles).includes('rankings'), false);
@@ -537,6 +675,7 @@ test('lists a strict profile catalog with explicit per-sport defaults', async ()
             asOf: '2026-08-31',
             format: 'draftsheets-2026',
             rankingCount: 500,
+            scoringFormat: null,
           }],
           defaults: [{ sport: 'f1', sourceLeagueId: '498589' }],
           privatePath: '/Users/private/draft-profile-defaults.json',
@@ -561,7 +700,7 @@ test('lists a strict profile catalog with explicit per-sport defaults', async ()
   assert.equal(JSON.stringify(catalog).includes('privatePath'), false);
 });
 
-test('sets and clears only a canonical same-origin sport default', async () => {
+test('sets and clears only a canonical same-origin sport default with explicit scoring', async () => {
   const requests = [];
   const fetchImpl = async (url, options) => {
     const request = JSON.parse(options.body);
@@ -572,17 +711,18 @@ test('sets and clears only a canonical same-origin sport default', async () => {
         status: 'success',
         sport: request.sport,
         sourceLeagueId: request.sourceLeagueId,
+        scoringFormat: request.scoringFormat,
       }),
     };
   };
 
   assert.deepEqual(
-    await setDefaultDraftProfile('f1', '498589', { fetchImpl }),
-    { status: 'success', sport: 'f1', sourceLeagueId: '498589' },
+    await setDefaultDraftProfile('f1', '498589', { scoringFormat: 'HALF', fetchImpl }),
+    { status: 'success', sport: 'f1', sourceLeagueId: '498589', scoringFormat: 'HALF' },
   );
   assert.deepEqual(
-    await setDefaultDraftProfile('f1', null, { fetchImpl }),
-    { status: 'success', sport: 'f1', sourceLeagueId: null },
+    await setDefaultDraftProfile('f1', null, { scoringFormat: null, fetchImpl }),
+    { status: 'success', sport: 'f1', sourceLeagueId: null, scoringFormat: null },
   );
   for (const captured of requests) {
     assert.equal(captured.url, '/draft-profile-default');
@@ -592,12 +732,12 @@ test('sets and clears only a canonical same-origin sport default', async () => {
     assert.equal(captured.options.headers['Content-Type'], 'application/json');
     assert.equal(captured.options.headers['X-Fantasy-Draft-UI'], '1');
     assert.deepEqual(Object.keys(captured.request).sort(), [
-      'schemaVersion', 'sourceLeagueId', 'sport',
+      'schemaVersion', 'scoringFormat', 'sourceLeagueId', 'sport',
     ]);
   }
   assert.deepEqual(requests.map(({ request }) => request), [
-    { schemaVersion: 1, sport: 'f1', sourceLeagueId: '498589' },
-    { schemaVersion: 1, sport: 'f1', sourceLeagueId: null },
+    { schemaVersion: 1, sport: 'f1', sourceLeagueId: '498589', scoringFormat: 'HALF' },
+    { schemaVersion: 1, sport: 'f1', sourceLeagueId: null, scoringFormat: null },
   ]);
   assert.equal(JSON.stringify(requests).includes('picks'), false);
   assert.equal(JSON.stringify(requests).includes('auth'), false);
@@ -606,6 +746,7 @@ test('sets and clears only a canonical same-origin sport default', async () => {
 test('default profile client rejects unsafe inputs and mismatched confirmations', async () => {
   await assert.rejects(
     setDefaultDraftProfile('f1', '498589', {
+      scoringFormat: 'HALF',
       endpoint: 'https://example.test/draft-profile-default',
       fetchImpl: async () => ({ ok: true, json: async () => ({}) }),
     }),
@@ -613,12 +754,14 @@ test('default profile client rejects unsafe inputs and mismatched confirmations'
   );
   await assert.rejects(
     setDefaultDraftProfile('https://private.example', '498589', {
+      scoringFormat: 'HALF',
       fetchImpl: async () => ({ ok: true, json: async () => ({}) }),
     }),
     /sport/i,
   );
   await assert.rejects(
     setDefaultDraftProfile('f1', '498589', {
+      scoringFormat: 'HALF',
       fetchImpl: async () => ({
         ok: true,
         json: async () => ({ status: 'success', sport: 'nfl', sourceLeagueId: '498589' }),
@@ -658,22 +801,27 @@ test('labels reusable profiles with validated sport and source or import date', 
     asOf: '2026-08-31',
     format: 'draftsheets-2026',
     rankingCount: 500,
-  }), 'Yahoo Football · League 777777 · DraftSheets · source Aug 31, 2026 · 500 rankings');
+    scoringFormat: 'HALF',
+  }), 'Yahoo Football · League 777777 · DraftSheets · Half PPR · source Aug 31, 2026 · 500 rankings');
   assert.equal(profileChoiceLabel({
     sport: 'nfl',
     leagueId: '498589',
     importedAt: '2026-09-01T12:34:56Z',
     format: 'json',
     rankingCount: 250,
-  }), 'NFL · League 498589 · JSON · imported Sep 1, 2026 · 250 rankings');
+  }), 'NFL · League 498589 · JSON · Scoring not set · imported Sep 1, 2026 · 250 rankings');
+  assert.equal(profileScoringLabel('STD'), 'Standard');
+  assert.equal(profileScoringLabel('HALF'), 'Half PPR');
+  assert.equal(profileScoringLabel('PPR'), 'PPR');
   assert.equal(profileSportLabel('f1'), 'Yahoo Football');
   assert.equal(profileSportLabel('nfl'), 'NFL');
   assert.equal(profileSportLabel('other_slug'), 'Other Yahoo fantasy sport');
 });
 
-test('explicitly binds only rankings/settings from a chosen source profile', async () => {
+test('explicitly binds only rankings/settings and selected scoring from a chosen source profile', async () => {
   let captured;
   const result = await bindDraftProfile('498589', '777777', {
+    scoringFormat: 'HALF',
     fetchImpl: async (url, options) => {
       captured = { url, options };
       return {
@@ -684,6 +832,7 @@ test('explicitly binds only rankings/settings from a chosen source profile', asy
           sourceLeagueId: '498589',
           rankingCount: 500,
           format: 'draftsheets-2026',
+          scoringFormat: 'HALF',
         }),
       };
     },
@@ -699,6 +848,7 @@ test('explicitly binds only rankings/settings from a chosen source profile', asy
     schemaVersion: 1,
     sourceLeagueId: '498589',
     leagueId: '777777',
+    scoringFormat: 'HALF',
   });
   assert.equal(captured.options.body.includes('picks'), false);
   assert.equal(captured.options.body.includes('teamId'), false);
@@ -708,6 +858,7 @@ test('explicitly binds only rankings/settings from a chosen source profile', asy
     sourceLeagueId: '498589',
     rankingCount: 500,
     format: 'draftsheets-2026',
+    scoringFormat: 'HALF',
   });
 });
 
@@ -926,11 +1077,13 @@ test('dashboard exposes a local import form while retaining recommendation contr
   assert.match(html, /id="profile-source-status"/);
   assert.match(html, /id="draft-profile-reuse-form"/);
   assert.match(html, /id="profile-source-league"/);
+  assert.match(html, /id="profile-reuse-scoring-format"/);
   assert.match(html, /Use for this draft/);
   assert.match(html, /rankings and league settings only/i);
   assert.match(html, /id="draft-profile-default-form"/);
   assert.match(html, /id="profile-default-sport"/);
   assert.match(html, /id="profile-default-source"/);
+  assert.match(html, /id="profile-default-scoring-format"/);
   assert.match(html, /id="clear-profile-default-button"/);
   assert.match(html, /future profileless Yahoo drafts/i);
   assert.match(html, /including real drafts and mocks/i);
@@ -938,11 +1091,25 @@ test('dashboard exposes a local import form while retaining recommendation contr
   assert.match(html, /picks are never copied/i);
   assert.doesNotMatch(html, /automatically detect(?:s|ed)? (?:an )?(?:instant )?mock/i);
   assert.match(html, /DraftSheets \.xlsx/);
+  assert.match(html, /id="profile-scoring-format"/);
+  assert.ok((html.match(/<option value="HALF" selected>Half PPR<\/option>/g) || []).length >= 3);
   assert.match(html, /id="recommendation-form"/);
   assert.match(html, /draft-profile-client\.js/);
   assert.match(appSource, /listDraftProfileCatalog\(/);
   assert.match(appSource, /bindDraftProfile\(/);
   assert.match(appSource, /setDefaultDraftProfile\(/);
+  assert.match(
+    appSource,
+    /bindDraftProfile\(sourceLeagueId, leagueId, \{\s*scoringFormat,?\s*\}\)/,
+  );
+  assert.match(
+    appSource,
+    /setDefaultDraftProfile\(sport, sourceLeagueId, \{\s*scoringFormat,?\s*\}\)/,
+  );
+  assert.match(
+    appSource,
+    /scoringFormat: document\.getElementById\('profile-scoring-format'\)\.value/,
+  );
   assert.doesNotMatch(appSource, /detect[^\n]{0,40}(?:instant )?mock/i);
   const orphanGuard = appSource.indexOf('if (currentDefault && !sourceProfile)');
   const validDefaultGuard = appSource.indexOf('if (currentDefault && sourceProfile)', orphanGuard);

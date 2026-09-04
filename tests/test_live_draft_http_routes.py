@@ -68,6 +68,7 @@ def live_state_for_profile() -> dict:
     return {
         "schemaVersion": 1,
         "source": "yahoo-draft-recorder",
+        "ledgerProof": "round-by-round",
         "generatedAt": "2026-09-01T16:00:00Z",
         "draft": {
             "sport": "nfl",
@@ -156,6 +157,43 @@ async def test_draft_revision_route_returns_only_exact_private_revision(monkeypa
     assert b"Private Player" not in response.body
     assert b"teamId" not in response.body
     assert response.headers["cache-control"] == "no-store"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("ledger_proof", "capture_blocked", "expected_blocked"),
+    [
+        (None, False, True),
+        ("round-by-round", False, False),
+        ("round-by-round", True, True),
+    ],
+)
+async def test_draft_revision_requires_authoritative_ledger_proof(
+    monkeypatch, ledger_proof, capture_blocked, expected_blocked
+) -> None:
+    context = live_state_for_profile()
+    if ledger_proof is None:
+        context.pop("ledgerProof", None)
+    else:
+        context["ledgerProof"] = ledger_proof
+    context["captureBlocked"] = capture_blocked
+    monkeypatch.setattr(
+        fastmcp_server,
+        "_load_bound_live_draft",
+        lambda _league_id: context,
+    )
+
+    response = await fastmcp_server.receive_live_draft_revision(
+        request_for(
+            "POST",
+            "/draft-revision",
+            payload={"schemaVersion": 1, "leagueId": "498589"},
+            origin="http://127.0.0.1:8765",
+        )
+    )
+
+    assert response.status_code == 200
+    assert response_json(response)["captureBlocked"] is expected_blocked
 
 
 @pytest.mark.asyncio

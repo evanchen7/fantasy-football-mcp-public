@@ -104,6 +104,17 @@
     if (!scan.ok) {
       return { authoritativePicks: null, health: null, error: scan.error };
     }
+    const trustworthyCurrentPick = positiveInteger(currentPickNumber);
+    if (scan.apparentRowCount === 0 && trustworthyCurrentPick === 1) {
+      return {
+        authoritativePicks: [],
+        health: summarizeNumberedLedgerHealth(analyzeLedger([])),
+        unparsedCompletedPickNumbers: [],
+        unparsedStructuralRowCount: 0,
+        ignoredFutureRowCount: 0,
+        error: null,
+      };
+    }
     if (scan.apparentRowCount === 0) {
       return {
         authoritativePicks: null,
@@ -111,7 +122,6 @@
         error: 'Yahoo’s Round-by-Round table has no completed rows. Wait for it to load before repairing.',
       };
     }
-    const trustworthyCurrentPick = positiveInteger(currentPickNumber);
     const snapshots = Array.isArray(scan.snapshots) ? scan.snapshots : [];
     const authoritativePicks = [];
     const unparsedCompletedPickNumbers = [];

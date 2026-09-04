@@ -155,8 +155,9 @@
     return Object.values(sessions).sort((left, right) => String(right.updatedAt || '').localeCompare(String(left.updatedAt || '')))[0];
   }
 
-  function repairCoordinatorFor(sessionKey, lease) {
+  function repairCoordinatorFor(sessionKey, lease, expectedIdentity) {
     return YahooDraftSessionStore.createDurableRepairCoordinator({
+      expectedIdentity,
       readPending: () => leaseAwait(lease, () => draftStorage.getPendingRepair(sessionKey)),
       writePending: (record) => leaseAwait(
         lease,
@@ -354,7 +355,7 @@
       result = await operationLock.run(sessionKey, async (lease) => {
         const repairResult = await leaseAwait(
           lease,
-          () => repairCoordinatorFor(sessionKey, lease).reconcile(),
+          () => repairCoordinatorFor(sessionKey, lease, activeDiagnostics).reconcile(),
         );
         if (!repairResult.ok) return repairResult;
 

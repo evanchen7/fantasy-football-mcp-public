@@ -153,6 +153,7 @@ def live_context() -> dict:
     return {
         "schemaVersion": 1,
         "source": "yahoo-draft-recorder",
+        "ledgerProof": "round-by-round",
         "generatedAt": datetime.now(timezone.utc).isoformat(),
         "draft": {
             "sport": "nfl",
@@ -989,6 +990,67 @@ def test_authoritative_capture_integrity_blocks_complete_ledger_recommendations(
     assert result["status"] == "blocked"
     assert result["recommendations"] == []
     assert any("capture integrity" in warning.lower() for warning in result["warnings"])
+
+
+def test_fresh_empty_ledger_without_authoritative_proof_blocks_recommendations() -> None:
+    context = live_context()
+    context["picks"] = []
+    context.pop("ledgerProof")
+
+    result = LiveDraftRecommendationEngine(simulations=0).recommend(
+        context, rankings(), {"teams": 4}
+    )
+
+    assert result["status"] == "blocked"
+    assert result["recommendations"] == []
+    assert result["state"]["health"]["authoritativeLedgerProven"] is False
+    assert any("proof" in warning.lower() for warning in result["warnings"])
+
+
+def test_verified_pick_one_state_can_recommend_before_any_player_is_drafted() -> None:
+    context = live_context()
+    context["picks"] = []
+
+    result = LiveDraftRecommendationEngine(simulations=0).recommend(
+        context, rankings(), {"teams": 4}
+    )
+
+    assert result["status"] == "success"
+    assert result["recommendations"]
+    assert result["state"]["currentOverallPick"] == 1
+    assert result["state"]["health"]["authoritativeLedgerProven"] is True
+
+
+@pytest.mark.parametrize("proof", [None, "", "picks-panel", {"source": "round-by-round"}])
+def test_missing_or_invalid_authoritative_proof_blocks_a_contiguous_ledger(
+    proof: object,
+) -> None:
+    context = live_context()
+    if proof is None:
+        context.pop("ledgerProof")
+    else:
+        context["ledgerProof"] = proof
+
+    result = LiveDraftRecommendationEngine(simulations=0).recommend(
+        context, rankings(), {"teams": 4}
+    )
+
+    assert result["status"] == "blocked"
+    assert result["recommendations"] == []
+
+
+def test_stale_no_evidence_blocker_remains_blocked() -> None:
+    context = live_context()
+    context["captureBlocked"] = True
+    context["generatedAt"] = "2000-01-01T00:00:00Z"
+
+    result = LiveDraftRecommendationEngine(simulations=0).recommend(
+        context, rankings(), {"teams": 4}
+    )
+
+    assert result["status"] == "blocked"
+    assert result["state"]["health"]["fresh"] is False
+    assert result["state"]["health"]["authoritativeLedgerProven"] is True
 
 
 def test_no_rankings_returns_state_advice_without_inventing_players() -> None:

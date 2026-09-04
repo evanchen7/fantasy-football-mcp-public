@@ -174,6 +174,31 @@ test('keeps a fully parsed completed ledger unchanged', () => {
   assert.equal(result.ignoredFutureRowCount, 0);
 });
 
+test('accepts an empty Round-by-Round table only with stable pick-one evidence', () => {
+  const scan = { ok: true, tableCount: 1, apparentRowCount: 0, snapshots: [] };
+
+  assert.deepEqual(evaluateAuthoritativeLedgerScan(scan, [], 1), {
+    authoritativePicks: [],
+    health: {
+      highestPickNumber: 0,
+      missingPickNumbers: [],
+      duplicatePickNumbers: [],
+    },
+    unparsedCompletedPickNumbers: [],
+    unparsedStructuralRowCount: 0,
+    ignoredFutureRowCount: 0,
+    error: null,
+  });
+  assert.match(
+    evaluateAuthoritativeLedgerScan(scan, [], null).error,
+    /no completed rows/i,
+  );
+  assert.match(
+    evaluateAuthoritativeLedgerScan(scan, [], 2).error,
+    /no completed rows/i,
+  );
+});
+
 test('reports exact missing and duplicate pick numbers', () => {
   const health = analyzeLedger([
     { pickNumber: 1, player: 'J. Chase' },

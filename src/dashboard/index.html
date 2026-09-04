@@ -95,12 +95,20 @@
         <form id="draft-profile-reuse-form" class="profile-reuse-form">
           <div>
             <h3>Reuse a saved profile</h3>
-            <p id="profile-reuse-help">Choose the source yourself. This copies rankings and league settings only; the selected draft keeps its own recorded picks.</p>
+            <p id="profile-reuse-help">Choose the source and scoring yourself. This copies rankings and league settings only; the selected draft keeps its own recorded picks.</p>
           </div>
           <label>
             <span>Saved source draft</span>
             <select id="profile-source-league" name="sourceLeagueId" aria-describedby="profile-reuse-help" required disabled>
               <option value="">Loading saved profiles…</option>
+            </select>
+          </label>
+          <label>
+            <span>Scoring</span>
+            <select id="profile-reuse-scoring-format" name="scoringFormat" aria-describedby="profile-reuse-help" required>
+              <option value="STD">Standard</option>
+              <option value="HALF" selected>Half PPR</option>
+              <option value="PPR">PPR</option>
             </select>
           </label>
           <button id="reuse-profile-button" type="submit" disabled>Use for this draft &amp; refresh</button>
@@ -109,7 +117,7 @@
         <form id="draft-profile-default-form" class="profile-default-form">
           <div class="profile-default-copy">
             <h3>Default for future drafts</h3>
-            <p id="profile-default-help">Choose one current-season saved profile per sport for future profileless Yahoo drafts, including real drafts and mocks. Exact profiles are never overwritten; picks are never copied. Replace or clear the default after a season rollover.</p>
+            <p id="profile-default-help">Choose one current-season saved profile and explicit scoring format per sport for future profileless Yahoo drafts, including real drafts and mocks. Exact profiles are never overwritten; picks are never copied. Replace or clear the default after a season rollover.</p>
           </div>
           <label>
             <span>Yahoo sport</span>
@@ -121,6 +129,14 @@
             <span>Default saved profile</span>
             <select id="profile-default-source" name="sourceLeagueId" aria-describedby="profile-default-help" required disabled>
               <option value="">Choose a sport first</option>
+            </select>
+          </label>
+          <label>
+            <span>Scoring</span>
+            <select id="profile-default-scoring-format" name="scoringFormat" aria-describedby="profile-default-help" required>
+              <option value="STD">Standard</option>
+              <option value="HALF" selected>Half PPR</option>
+              <option value="PPR">PPR</option>
             </select>
           </label>
           <div class="profile-default-actions">
@@ -153,6 +169,14 @@
             <span>League teams</span>
             <input id="profile-team-count" name="teams" type="number" min="2" max="20" value="12" required>
           </label>
+          <label>
+            <span>Scoring</span>
+            <select id="profile-scoring-format" name="scoringFormat" required>
+              <option value="STD">Standard</option>
+              <option value="HALF" selected>Half PPR</option>
+              <option value="PPR">PPR</option>
+            </select>
+          </label>
           <button id="import-profile-button" type="submit">Import profile</button>
 
           <fieldset class="roster-fieldset">
@@ -171,7 +195,7 @@
           </fieldset>
         </form>
         <div class="profile-help">
-          <p><strong>Supported:</strong> DraftSheets .xlsx, or the ECR tab exported as CSV, plus schemaVersion 1 JSON. DraftSheets imports use the top 500 players by overall rank.</p>
+          <p><strong>Supported:</strong> DraftSheets .xlsx, or the ECR tab exported as CSV, plus schemaVersion 1 JSON. DraftSheets imports use the top 500 players by overall rank. The visible Standard, Half PPR, or PPR choice is stored explicitly with the league profile.</p>
           <p>CSV/JSON may add all six optional Breakout Watch fields: source, as-of date, projected points, projected opportunities, opportunity kind, and experience years. Use touches for RB; targets or receptions for WR/TE. DraftSheets .xlsx does not import this evidence. When configured, fresh FantasyPros projections can also be combined automatically with conservatively matched, locally cached Sleeper experience.</p>
           <p>CSV and JSON are reduced to allowlisted ranking fields in your browser. XLSX bytes go only to the bounded loopback parser and are never stored; filenames, URLs, notes, and arbitrary cells are not persisted.</p>
         </div>

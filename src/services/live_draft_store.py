@@ -20,6 +20,7 @@ _SESSION_KEY = re.compile(r"^[A-Za-z0-9_-]{1,32}:[A-Za-z0-9_-]{1,64}$")
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 _PICK_STRING_FIELDS = ("player", "position", "nflTeam", "fantasyTeam", "recordedAt")
 _RESET_TOMBSTONES_KEY = "__resetTombstones"
+_AUTHORITATIVE_LEDGER_PROOF = "round-by-round"
 
 
 class LiveDraftValidationError(ValueError):
@@ -112,6 +113,15 @@ def _capture_blocked_requested(value: Any) -> Optional[bool]:
     return capture_blocked
 
 
+def _ledger_proof_requested(value: Any) -> Optional[str]:
+    if not isinstance(value, dict) or "ledgerProof" not in value:
+        return None
+    ledger_proof = value["ledgerProof"]
+    if ledger_proof != _AUTHORITATIVE_LEDGER_PROOF:
+        raise LiveDraftValidationError("ledgerProof must equal round-by-round")
+    return _AUTHORITATIVE_LEDGER_PROOF
+
+
 def sanitize_live_draft_context(value: Any) -> Dict[str, Any]:
     """Validate and whitelist the extension payload before writing it to disk."""
 
@@ -148,6 +158,7 @@ def sanitize_live_draft_context(value: Any) -> Dict[str, Any]:
 
     repair = _repair_requested(value)
     capture_blocked = _capture_blocked_requested(value)
+    ledger_proof = _ledger_proof_requested(value)
     if repair and capture_blocked is True:
         raise LiveDraftValidationError(
             "repair cannot retain an authoritative capture blocker"
@@ -169,6 +180,7 @@ def sanitize_live_draft_context(value: Any) -> Dict[str, Any]:
             raise LiveDraftValidationError(
                 "repair pick numbers must be contiguous from 1"
             )
+        ledger_proof = _AUTHORITATIVE_LEDGER_PROOF
     user_roster = [pick for pick in picks if pick["isUserPick"]]
     team_rosters: Dict[str, list[Dict[str, Any]]] = {}
     for pick in picks:
@@ -194,6 +206,8 @@ def sanitize_live_draft_context(value: Any) -> Dict[str, Any]:
     }
     if capture_blocked is not None:
         context["captureBlocked"] = capture_blocked
+    if ledger_proof is not None:
+        context["ledgerProof"] = ledger_proof
     return context
 
 
@@ -372,6 +386,14 @@ def save_live_draft(value: Any, path: Optional[Union[str, Path]] = None) -> Dict
             ):
                 raise LiveDraftValidationError(
                     "stored captureBlocked value must be a boolean"
+                )
+            existing_ledger_proof = existing.get("ledgerProof")
+            if (
+                "ledgerProof" in existing
+                and existing_ledger_proof != _AUTHORITATIVE_LEDGER_PROOF
+            ):
+                raise LiveDraftValidationError(
+                    "stored ledgerProof value must equal round-by-round"
                 )
             existing_time = _timestamp(existing.get("generatedAt"))
             incoming_time = _timestamp(context.get("generatedAt"))
