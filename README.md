@@ -152,6 +152,8 @@ The easiest interfaces are:
 
 The sidebar and dashboard separate **Risk style** from **Draft plan**. Risk style changes the relative weight of floor/news caution and scenario upside. Draft plan adds an independent, round-aware roster-construction preference: **Balanced RB/WR** targets two RBs and two WRs through Round 4, **Hero RB** seeks one early anchor RB before building WR depth, **WR-heavy / Zero RB** prioritizes receivers before attacking RB upside in Rounds 5–7, and **RB-heavy** targets two RBs by Round 3 and three by Round 5. **Best available** preserves value-and-roster scoring without a positional-plan preference. These are bounded scoring signals rather than absolute locks, so exceptional tier value and league-specific roster needs can still win.
 
+Every plan also receives a separate **position scarcity** score. The server derives a replacement position rank from the league's team count and configured QB/RB/WR/TE, FLEX, and Superflex slots. When a complete, fresh FantasyPros projection cohort reaches that replacement rank, it scores projected points above replacement; otherwise it uses the overall-ranking gap to the same-position replacement player only when the imported ranking pool is deep enough. Incomplete evidence stays neutral rather than inventing scarcity. This rewards genuinely hard-to-replace RB production without applying a blanket bonus to all RBs.
+
 Both views show the same transparent market-decision signals:
 
 - **Value** means the current pick is at least one league round later than the player's explicitly supplied market ADP.
