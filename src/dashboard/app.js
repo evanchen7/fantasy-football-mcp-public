@@ -7,6 +7,7 @@
   const cockpit = globalThis.YahooDraftCockpit;
   const profileClient = globalThis.YahooDraftProfileClient;
   const liveRefresh = globalThis.YahooDraftDashboardLiveRefresh;
+  const providerCache = globalThis.YahooDraftProviderCache;
   const form = document.getElementById('recommendation-form');
   const profileForm = document.getElementById('draft-profile-form');
   const profileReuseForm = document.getElementById('draft-profile-reuse-form');
@@ -1440,6 +1441,24 @@
     livePoller?.visibilityChanged();
   });
   prefillLeagueFromFragment();
+
+  if (providerCache) {
+    try {
+      providerCache.createProviderCachePanel();
+    } catch (_error) {
+      const providerCacheStatus = document.getElementById('provider-cache-status');
+      if (providerCacheStatus) {
+        providerCacheStatus.textContent = 'Provider cache controls could not be initialized.';
+        providerCacheStatus.className = 'provider-cache-status error';
+      }
+    }
+  } else {
+    const providerCacheStatus = document.getElementById('provider-cache-status');
+    if (providerCacheStatus) {
+      providerCacheStatus.textContent = 'Provider cache controls are unavailable.';
+      providerCacheStatus.className = 'provider-cache-status error';
+    }
+  }
 
   if (!client || !viewModels || !renderer || !cockpit || !liveRefresh) {
     setStatus('Shared recommendation UI modules are unavailable.', 'error');

@@ -236,6 +236,125 @@ class FantasyProsSnapshotCache:
         except (OSError, sqlite3.Error, TypeError, ValueError) as error:
             raise FantasyProsSnapshotCacheUnavailable from error
 
+    def metadata(self, *, now: datetime) -> dict[str, Any]:
+        """Inspect normalized snapshot counts without creating or changing the cache."""
+
+        unavailable = {
+            "status": "unavailable",
+            "sizeBytes": None,
+            "snapshotCount": 0,
+            "recordCount": 0,
+            "latestFetchedAt": None,
+            "snapshots": [],
+        }
+        try:
+            if now.tzinfo is None or now.utcoffset() is None:
+                return unavailable
+            destination = self.path
+            if destination.parent.is_symlink() or destination.is_symlink():
+                return unavailable
+            if not destination.exists():
+                return {
+                    "status": "missing",
+                    "sizeBytes": None,
+                    "snapshotCount": 0,
+                    "recordCount": 0,
+                    "latestFetchedAt": None,
+                    "snapshots": [],
+                }
+            if not destination.is_file():
+                return unavailable
+            file_metadata = destination.stat()
+            if (
+                file_metadata.st_nlink != 1
+                or file_metadata.st_size < 0
+                or file_metadata.st_size > _MAX_DATABASE_BYTES
+            ):
+                return unavailable
+            database_uri = f"{destination.resolve().as_uri()}?mode=ro"
+            with closing(
+                sqlite3.connect(
+                    database_uri,
+                    uri=True,
+                    timeout=_BUSY_TIMEOUT_MILLISECONDS / 1_000,
+                )
+            ) as connection:
+                connection.execute(f"PRAGMA busy_timeout = {_BUSY_TIMEOUT_MILLISECONDS}")
+                connection.execute("PRAGMA query_only = ON")
+                version = connection.execute("PRAGMA user_version").fetchone()
+                if version != (_SCHEMA_VERSION,):
+                    return unavailable
+                rows = connection.execute(
+                    """
+                    SELECT endpoint, variant, season, week, request_limit, record_limit,
+                           fetched_at, records_json, truncated, returned_count,
+                           reported_count, reported_limit, public_api_limited
+                    FROM snapshots
+                    ORDER BY fetched_at DESC, endpoint, variant, season, week,
+                             request_limit, record_limit
+                    LIMIT 17
+                    """
+                ).fetchall()
+            if len(rows) > _MAX_SNAPSHOTS:
+                return unavailable
+
+            snapshots: list[dict[str, Any]] = []
+            total_records = 0
+            for row in rows:
+                key = FantasyProsSnapshotKey(
+                    endpoint=row[0],
+                    variant=row[1],
+                    season=row[2],
+                    week=row[3],
+                    request_limit=row[4],
+                    record_limit=row[5],
+                )
+                snapshot = self._decode_snapshot(key, row[6:])
+                record_count = len(snapshot.records)
+                total_records += record_count
+                if key.endpoint == "players" and key.variant == "catalog-season":
+                    season: int | None = key.season
+                    week: int | None = key.week
+                elif key.endpoint in {"injuries", "projections", "adp"}:
+                    season = key.season
+                    week = key.week
+                else:
+                    season = None
+                    week = None
+                snapshots.append(
+                    {
+                        "endpoint": key.endpoint,
+                        "variant": key.variant,
+                        "season": season,
+                        "week": week,
+                        "fetchedAt": snapshot.fetched_at.isoformat().replace(
+                            "+00:00", "Z"
+                        ),
+                        "recordCount": record_count,
+                        "returnedCount": snapshot.returned_count,
+                        "reportedCount": snapshot.reported_count,
+                        "truncated": snapshot.truncated,
+                        "publicApiLimited": snapshot.public_api_limited,
+                    }
+                )
+            return {
+                "status": "available",
+                "sizeBytes": file_metadata.st_size,
+                "snapshotCount": len(snapshots),
+                "recordCount": total_records,
+                "latestFetchedAt": snapshots[0]["fetchedAt"] if snapshots else None,
+                "snapshots": snapshots,
+            }
+        except (
+            FantasyProsSnapshotCacheUnavailable,
+            OSError,
+            sqlite3.Error,
+            TypeError,
+            ValueError,
+            json.JSONDecodeError,
+        ):
+            return unavailable
+
     @contextmanager
     def _connection(self) -> Iterator[sqlite3.Connection]:
         try:

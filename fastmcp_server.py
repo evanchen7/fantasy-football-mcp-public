@@ -7,6 +7,7 @@ This module wraps the existing Yahoo Fantasy Football tooling defined in
 ``@server.tool`` decorator so it can be deployed on fastmcp.cloud.
 """
 
+import asyncio
 import json
 import os
 import re
@@ -47,6 +48,12 @@ from src.services.live_draft_store import (
     reset_live_draft,
     sanitize_live_draft_context,
     save_live_draft,
+)
+from src.services.provider_cache_maintenance import (
+    ProviderCacheMaintenanceBusy,
+    ProviderCacheMaintenanceTimeout,
+    get_provider_cache_stats,
+    run_provider_cache_job,
 )
 
 # REMOVED: enhanced_mcp_tools imports - no longer using wrapper tools
@@ -724,6 +731,7 @@ _DRAFT_PROFILE_MAX_BODY = 512_000
 _DRAFT_PROFILE_BIND_MAX_BODY = 4_096
 _DRAFT_PROFILE_DEFAULT_MAX_BODY = 4_096
 _DRAFT_PROFILE_XLSX_MAX_BODY = 2_000_000
+_PROVIDER_CACHE_RUN_MAX_BODY = 128
 _DRAFT_RECOMMENDATION_FIELDS = frozenset(
     {
         "schemaVersion",
@@ -865,6 +873,34 @@ def _draft_dashboard_headers() -> Dict[str, str]:
         "X-Content-Type-Options": "nosniff",
         "X-Frame-Options": "DENY",
     }
+
+
+def _provider_cache_headers(request: Request) -> Dict[str, str]:
+    origin = request.headers.get("origin", "")
+    headers = {
+        "Access-Control-Allow-Headers": "Content-Type, X-Fantasy-Draft-UI",
+        "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+        "Access-Control-Allow-Private-Network": "true",
+        "Cache-Control": "no-store",
+        "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'",
+        "Referrer-Policy": "no-referrer",
+        "Vary": "Origin",
+        "X-Content-Type-Options": "nosniff",
+        "X-Frame-Options": "DENY",
+    }
+    if origin and _is_same_loopback_origin(request, origin):
+        headers["Access-Control-Allow-Origin"] = origin
+    return headers
+
+
+def _provider_cache_error(
+    request: Request, message: str, status_code: int
+) -> JSONResponse:
+    return JSONResponse(
+        {"status": "error", "message": message},
+        status_code=status_code,
+        headers=_provider_cache_headers(request),
+    )
 
 
 def _draft_json_error(
@@ -1663,6 +1699,99 @@ async def receive_live_draft_recommendation(request: Request) -> Response:
     return JSONResponse(result, headers=headers)
 
 
+@server.custom_route(
+    "/provider-cache/stats", methods=["GET", "OPTIONS"], include_in_schema=False
+)
+async def receive_provider_cache_stats(request: Request) -> Response:
+    """Return read-only provider snapshot and FantasyPros budget metadata."""
+
+    headers = _provider_cache_headers(request)
+    if not _is_loopback_request(request) or not _has_loopback_host(request):
+        return _provider_cache_error(request, "Loopback access required", 403)
+    if request.url.query:
+        return _provider_cache_error(request, "Query parameters are not allowed", 400)
+    origin = request.headers.get("origin", "")
+    if origin and not _is_same_loopback_origin(request, origin):
+        return _provider_cache_error(request, "Origin not allowed", 403)
+    if request.method == "OPTIONS":
+        return Response(status_code=204, headers=headers)
+    if request.headers.get("x-fantasy-draft-ui") != "1":
+        return _provider_cache_error(request, "UI header required", 403)
+    try:
+        result = await asyncio.to_thread(get_provider_cache_stats)
+    except Exception:
+        return _provider_cache_error(request, "Provider cache service unavailable", 503)
+    return JSONResponse(result, headers=headers)
+
+
+@server.custom_route(
+    "/provider-cache/run", methods=["POST", "OPTIONS"], include_in_schema=False
+)
+async def receive_provider_cache_run(request: Request) -> Response:
+    """Run one TTL-aware provider cache maintenance pass from the dashboard."""
+
+    headers = _provider_cache_headers(request)
+    if not _is_loopback_request(request) or not _has_loopback_host(request):
+        return _provider_cache_error(request, "Loopback access required", 403)
+    if request.url.query:
+        return _provider_cache_error(request, "Query parameters are not allowed", 400)
+    origin = request.headers.get("origin", "")
+    if not origin:
+        return _provider_cache_error(request, "Origin required", 403)
+    if not _is_same_loopback_origin(request, origin):
+        return _provider_cache_error(request, "Origin not allowed", 403)
+    if request.method == "OPTIONS":
+        return Response(status_code=204, headers=headers)
+    if request.headers.get("x-fantasy-draft-ui") != "1":
+        return _provider_cache_error(request, "UI header required", 403)
+    content_type = request.headers.get("content-type", "")
+    if (
+        len(content_type) > 64
+        or content_type.split(";", 1)[0].strip().lower() != "application/json"
+    ):
+        return _provider_cache_error(
+            request, "Content-Type must be application/json", 415
+        )
+    if request.headers.get("transfer-encoding"):
+        return _provider_cache_error(request, "Transfer encoding is not allowed", 400)
+    raw_content_length = request.headers.get("content-length")
+    if raw_content_length is None or not re.fullmatch(
+        r"[1-9]\d{0,2}", raw_content_length
+    ):
+        return _provider_cache_error(request, "Invalid content length", 400)
+    content_length = int(raw_content_length)
+    if content_length > _PROVIDER_CACHE_RUN_MAX_BODY:
+        return _provider_cache_error(request, "Payload too large", 413)
+    body = await request.body()
+    if len(body) != content_length:
+        return _provider_cache_error(request, "Content length does not match body", 400)
+    try:
+        payload = json.loads(body)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return _provider_cache_error(request, "Request body must be valid JSON", 400)
+    if not isinstance(payload, dict):
+        return _provider_cache_error(request, "Request body must be a JSON object", 400)
+    if set(payload) != {"schemaVersion", "scoring"}:
+        return _provider_cache_error(request, "Provider cache run fields are invalid", 400)
+    schema_version = payload.get("schemaVersion")
+    if type(schema_version) is not int or schema_version != 1:
+        return _provider_cache_error(request, "schemaVersion 1 is required", 400)
+    scoring = payload.get("scoring")
+    if not isinstance(scoring, str) or scoring not in {"STD", "HALF", "PPR"}:
+        return _provider_cache_error(request, "scoring is invalid", 400)
+    try:
+        result = await run_provider_cache_job(scoring=scoring)
+    except ProviderCacheMaintenanceBusy:
+        return _provider_cache_error(
+            request, "Provider cache maintenance is already running", 409
+        )
+    except ProviderCacheMaintenanceTimeout:
+        return _provider_cache_error(request, "Provider cache maintenance timed out", 504)
+    except Exception:
+        return _provider_cache_error(request, "Provider cache service unavailable", 503)
+    return JSONResponse(result, headers=headers)
+
+
 def _serve_draft_dashboard_asset(request: Request, filename: str, media_type: str) -> Response:
     if not _is_loopback_request(request):
         return JSONResponse(
@@ -1715,6 +1844,17 @@ async def serve_draft_profile_client(request: Request) -> Response:
 )
 async def serve_draft_dashboard_live_refresh(request: Request) -> Response:
     return _serve_draft_dashboard_asset(request, "live-refresh.js", "text/javascript")
+
+
+@server.custom_route(
+    "/draft-dashboard/provider-cache-client.js",
+    methods=["GET"],
+    include_in_schema=False,
+)
+async def serve_provider_cache_client(request: Request) -> Response:
+    return _serve_draft_dashboard_asset(
+        request, "provider-cache-client.js", "text/javascript"
+    )
 
 
 @server.custom_route(

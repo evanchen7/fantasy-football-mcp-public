@@ -343,6 +343,76 @@ def _adp_payload(
 
 
 @pytest.mark.asyncio
+async def test_cache_warmer_is_ttl_aware_and_returns_only_metadata(
+    source_payloads: dict[str, dict[str, Any]],
+) -> None:
+    source_payloads["projections"] = _projection_payload(scoring="HALF")
+    transport = FakeTransport(source_payloads)
+    provider = _provider(
+        api_key="private-api-key",
+        transport=transport,
+        clock=lambda: datetime(2026, 9, 1, tzinfo=timezone.utc),
+    )
+
+    first = await provider.warm_cache(year=2026, scoring="HALF")
+    second = await provider.warm_cache(year=2026, scoring="HALF")
+
+    assert len(transport.calls) == 5
+    assert [call["url"].rsplit("/", 1)[-1] for call in transport.calls] == [
+        "players",
+        "injuries",
+        "news",
+        "projections",
+        "consensus-rankings",
+    ]
+    assert first == second
+    assert first["status"] == "success"
+    assert set(first["datasets"]) == {
+        "players",
+        "injuries",
+        "news",
+        "projections",
+        "adp",
+    }
+    assert first["datasets"]["projections"]["recordCount"] == 2
+    assert first["datasets"]["adp"]["recordCount"] == 2
+    encoded = json.dumps(first)
+    assert "private-api-key" not in encoded
+    assert "must-not-escape" not in encoded
+
+
+@pytest.mark.asyncio
+async def test_cache_warmer_degrades_empty_essential_data_but_allows_no_injuries(
+    source_payloads: dict[str, dict[str, Any]],
+) -> None:
+    source_payloads["injuries"]["injuries"] = []
+    source_payloads["projections"] = {
+        **_projection_payload(scoring="HALF"),
+        "count": "0",
+        "players": [],
+    }
+    provider = _provider(
+        api_key="private-api-key",
+        transport=FakeTransport(source_payloads),
+        clock=lambda: datetime(2026, 9, 1, tzinfo=timezone.utc),
+    )
+
+    result = await provider.warm_cache(year=2026, scoring="HALF")
+
+    assert result["status"] == "degraded"
+    assert result["datasets"]["injuries"]["status"] == "available"
+    assert result["datasets"]["injuries"]["recordCount"] == 0
+    assert result["datasets"]["projections"] == {
+        "status": "unavailable",
+        "recordCount": 0,
+        "fetchedAt": None,
+        "stale": False,
+        "refreshFailed": True,
+        "publicApiLimited": False,
+    }
+
+
+@pytest.mark.asyncio
 async def test_half_ppr_adp_uses_scoring_specific_consensus_snapshot(
     source_payloads: dict[str, dict[str, Any]],
 ) -> None:

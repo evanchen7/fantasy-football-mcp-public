@@ -99,6 +99,66 @@ class FantasyProsDailyRequestBudget:
         except (OSError, ValueError, TypeError, json.JSONDecodeError) as error:
             raise FantasyProsRequestBudgetUnavailable from error
 
+    def metadata(self, *, now: datetime) -> dict[str, object]:
+        """Read bounded daily usage without creating or modifying any files."""
+
+        try:
+            if now.tzinfo is None or now.utcoffset() is None:
+                raise FantasyProsRequestBudgetUnavailable
+            today = now.astimezone(timezone.utc).date()
+            destination = self.path
+            if destination.parent.is_symlink() or destination.is_symlink():
+                raise FantasyProsRequestBudgetUnavailable
+            if not destination.exists():
+                return self._metadata_result("missing", today, 0)
+            if not destination.is_file():
+                raise FantasyProsRequestBudgetUnavailable
+            flags = os.O_RDONLY
+            if hasattr(os, "O_NOFOLLOW"):
+                flags |= os.O_NOFOLLOW
+            descriptor = os.open(destination, flags)
+            try:
+                metadata = os.fstat(descriptor)
+                if metadata.st_nlink != 1 or metadata.st_size > _MAX_STATE_BYTES:
+                    raise FantasyProsRequestBudgetUnavailable
+                with os.fdopen(descriptor, encoding="utf-8") as source:
+                    descriptor = -1
+                    stored_date, request_count = self._decode_state(source.read())
+            finally:
+                if descriptor >= 0:
+                    os.close(descriptor)
+            if stored_date > today:
+                raise FantasyProsRequestBudgetUnavailable
+            effective_count = request_count if stored_date == today else 0
+            if effective_count > self._daily_limit:
+                raise FantasyProsRequestBudgetUnavailable
+            return self._metadata_result("available", today, effective_count)
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            return self._metadata_result("unavailable", now, None)
+        except FantasyProsRequestBudgetUnavailable:
+            return self._metadata_result("unavailable", now, None)
+
+    def _metadata_result(
+        self,
+        status: str,
+        today: date | datetime,
+        used: int | None,
+    ) -> dict[str, object]:
+        if isinstance(today, datetime):
+            if today.tzinfo is not None and today.utcoffset() is not None:
+                utc_date = today.astimezone(timezone.utc).date()
+            else:
+                utc_date = datetime.now(timezone.utc).date()
+        else:
+            utc_date = today
+        return {
+            "status": status,
+            "utcDate": utc_date.isoformat(),
+            "used": used,
+            "remaining": self._daily_limit - used if used is not None else None,
+            "limit": self._daily_limit,
+        }
+
     @staticmethod
     def _next_day(today: date) -> datetime:
         return datetime.combine(today + timedelta(days=1), datetime_time(), timezone.utc)
@@ -157,6 +217,11 @@ class FantasyProsDailyRequestBudget:
             raise FantasyProsRequestBudgetUnavailable
         destination.chmod(0o600)
         raw = destination.read_text(encoding="utf-8")
+        stored_date, request_count = self._decode_state(raw)
+        return stored_date, request_count
+
+    @staticmethod
+    def _decode_state(raw: str) -> tuple[date, int]:
         value = json.loads(raw)
         if not isinstance(value, dict) or set(value) != _STATE_FIELDS:
             raise FantasyProsRequestBudgetUnavailable
