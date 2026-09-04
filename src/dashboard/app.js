@@ -511,7 +511,16 @@
       return;
     }
     show('scenario-panel');
-    const scoreKeys = ['value', 'rosterConstruction', 'draftDynamics', 'opponentModel', 'riskNews', 'scenario'];
+    const scoreKeys = [
+      'value',
+      'rosterConstruction',
+      'draftPlan',
+      'positionScarcity',
+      'draftDynamics',
+      'opponentModel',
+      'riskNews',
+      'scenario',
+    ];
     recommendations.forEach((item) => {
       const row = document.createElement('tr');
       row.appendChild(textElement('th', String(item?.player?.name || 'Unknown')));

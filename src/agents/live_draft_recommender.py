@@ -51,6 +51,7 @@ _STRATEGY_WEIGHTS = {
         "value": 0.32,
         "rosterConstruction": 0.24,
         "draftPlan": 0.18,
+        "positionScarcity": 0.16,
         "draftDynamics": 0.10,
         "opponentModel": 0.12,
         "riskNews": 0.12,
@@ -60,6 +61,7 @@ _STRATEGY_WEIGHTS = {
         "value": 0.28,
         "rosterConstruction": 0.15,
         "draftPlan": 0.15,
+        "positionScarcity": 0.16,
         "draftDynamics": 0.12,
         "opponentModel": 0.12,
         "riskNews": 0.08,
@@ -69,6 +71,7 @@ _STRATEGY_WEIGHTS = {
         "value": 0.30,
         "rosterConstruction": 0.25,
         "draftPlan": 0.18,
+        "positionScarcity": 0.16,
         "draftDynamics": 0.08,
         "opponentModel": 0.10,
         "riskNews": 0.22,
@@ -537,6 +540,182 @@ class PlayerValueAgent:
         }
 
 
+class PositionScarcityAgent:
+    """Score value over a league-sized replacement player at the same position."""
+
+    name = "positionScarcity"
+    _SUPPORTED_POSITIONS = ("QB", "RB", "WR", "TE")
+    _FLEX_SHARES = {"RB": 0.45, "WR": 0.45, "TE": 0.10}
+
+    def __init__(
+        self,
+        candidates: Sequence[Candidate],
+        roster_positions: Sequence[Mapping[str, Any]],
+        team_count: int,
+    ):
+        self.candidates = list(candidates)
+        self.replacement_ranks = self._replacement_ranks(roster_positions, team_count)
+        self.position_candidates = {
+            position: sorted(
+                (candidate for candidate in self.candidates if candidate.position == position),
+                key=lambda candidate: (candidate.rank, candidate.name),
+            )
+            for position in self._SUPPORTED_POSITIONS
+        }
+        self.projection_cohorts = self._projection_cohorts()
+        self.ranking_levels = self._ranking_levels()
+        self.max_projection_vorp = max(
+            (
+                cohort["topPoints"] - cohort["replacementPoints"]
+                for cohort in self.projection_cohorts.values()
+            ),
+            default=0.0,
+        )
+        self.max_ranking_gap = max(
+            (
+                level["replacementOverallRank"] - level["topOverallRank"]
+                for level in self.ranking_levels.values()
+            ),
+            default=0.0,
+        )
+
+    @classmethod
+    def _replacement_ranks(
+        cls, roster_positions: Sequence[Mapping[str, Any]], team_count: int
+    ) -> dict[str, int]:
+        starters = Counter()
+        flex_count = 0
+        superflex_count = 0
+        for slot in roster_positions:
+            position = _position(slot.get("position"))
+            count = max(0, int(_number(slot.get("count"), 0)))
+            if position == "FLEX":
+                flex_count += count
+            elif position == "SUPERFLEX":
+                superflex_count += count
+            elif position in cls._SUPPORTED_POSITIONS:
+                starters[position] += count
+
+        teams = max(2, min(int(team_count), _MAX_TEAM_COUNT))
+        return {
+            position: max(
+                1,
+                math.ceil(
+                    teams
+                    * (
+                        starters[position]
+                        + flex_count * cls._FLEX_SHARES.get(position, 0.0)
+                        + (superflex_count if position == "QB" else 0)
+                    )
+                ),
+            )
+            for position in cls._SUPPORTED_POSITIONS
+        }
+
+    @staticmethod
+    def _trusted_projection(candidate: Candidate) -> tuple[tuple[int, str], float] | None:
+        raw = candidate.raw
+        points = _bounded_nonnegative_number(raw.get("projected_points"), 1_000.0)
+        season = raw.get("projection_season")
+        scoring = raw.get("projection_scoring")
+        if (
+            raw.get("projection_source") != "FantasyPros"
+            or raw.get("projection_stale") is not False
+            or points is None
+            or type(season) is not int
+            or scoring not in {"STD", "HALF", "PPR"}
+        ):
+            return None
+        return (season, scoring), points
+
+    def _projection_cohorts(self) -> dict[str, dict[str, Any]]:
+        result = {}
+        for position, candidates in self.position_candidates.items():
+            groups: dict[tuple[int, str], list[tuple[Candidate, float]]] = {}
+            for candidate in candidates:
+                projection = self._trusted_projection(candidate)
+                if projection is not None:
+                    key, points = projection
+                    groups.setdefault(key, []).append((candidate, points))
+            if not groups:
+                continue
+            key, entries = max(groups.items(), key=lambda item: (len(item[1]), item[0]))
+            replacement_rank = self.replacement_ranks[position]
+            if len(entries) < replacement_rank:
+                continue
+            entries.sort(key=lambda entry: (-entry[1], entry[0].rank, entry[0].name))
+            result[position] = {
+                "key": key,
+                "topPoints": entries[0][1],
+                "replacementPoints": entries[replacement_rank - 1][1],
+            }
+        return result
+
+    def _ranking_levels(self) -> dict[str, dict[str, float]]:
+        result = {}
+        for position, candidates in self.position_candidates.items():
+            replacement_rank = self.replacement_ranks[position]
+            if len(candidates) < replacement_rank:
+                continue
+            result[position] = {
+                "topOverallRank": candidates[0].rank,
+                "replacementOverallRank": candidates[replacement_rank - 1].rank,
+            }
+        return result
+
+    def score(self, candidate: Candidate) -> tuple[float, dict[str, Any]]:
+        position = candidate.position
+        replacement_rank = self.replacement_ranks.get(position)
+        cohort = self.projection_cohorts.get(position)
+        projection = self._trusted_projection(candidate)
+        if (
+            replacement_rank is not None
+            and cohort is not None
+            and projection is not None
+            and projection[0] == cohort["key"]
+            and self.max_projection_vorp > 0
+        ):
+            points = projection[1]
+            replacement_points = cohort["replacementPoints"]
+            vorp = max(0.0, points - replacement_points)
+            score = 20.0 + 80.0 * vorp / self.max_projection_vorp
+            impact = (
+                f"projects {vorp:.1f} points above the {position}{replacement_rank} "
+                "replacement level"
+            )
+            return max(0.0, min(100.0, score)), {
+                "method": "projection-vorp",
+                "replacementPositionRank": replacement_rank,
+                "replacementProjectedPoints": round(replacement_points, 2),
+                "valueOverReplacement": round(vorp, 2),
+                "impact": impact,
+            }
+
+        level = self.ranking_levels.get(position)
+        if replacement_rank is not None and level is not None and self.max_ranking_gap > 0:
+            replacement_overall_rank = level["replacementOverallRank"]
+            gap = max(0.0, replacement_overall_rank - candidate.rank)
+            score = 20.0 + 80.0 * gap / self.max_ranking_gap
+            impact = (
+                f"sits {gap:.1f} overall ranking slots above the estimated "
+                f"{position}{replacement_rank} replacement level"
+            )
+            return max(0.0, min(100.0, score)), {
+                "method": "ranking-depth",
+                "replacementPositionRank": replacement_rank,
+                "replacementOverallRank": round(replacement_overall_rank, 2),
+                "valueOverReplacement": round(gap, 2),
+                "impact": impact,
+            }
+
+        return 50.0, {
+            "method": "unavailable",
+            "replacementPositionRank": replacement_rank,
+            "valueOverReplacement": None,
+            "impact": "replacement-level scarcity is unavailable for this position",
+        }
+
+
 class RosterConstructionAgent:
     name = "rosterConstruction"
 
@@ -996,7 +1175,8 @@ class LiveDraftRecommendationEngine:
             Candidate.from_mapping(item, index) if isinstance(item, Mapping) else None
             for index, item in enumerate(rankings, start=1)
         ]
-        roster_agent = RosterConstructionAgent(state["userRoster"], _roster_positions(league))
+        roster_positions = _roster_positions(league)
+        roster_agent = RosterConstructionAgent(state["userRoster"], roster_positions)
         draft_plan_agent = DraftPlanAgent(state["userRoster"], draft_plan)
         injury_available = any(
             risk_agent.injury_available(candidate)
@@ -1077,6 +1257,11 @@ class LiveDraftRecommendationEngine:
             for index, candidate in enumerate(ranking_candidates)
             if candidate is not None
         ]
+        scarcity_agent = PositionScarcityAgent(
+            [candidate for _, candidate in valid_candidates],
+            roster_positions,
+            state["teamCount"],
+        )
         candidates: list[Candidate] = []
         drafted_count = 0
         candidate_breakout_labels: list[dict[str, Any] | None] = []
@@ -1124,6 +1309,7 @@ class LiveDraftRecommendationEngine:
             )
             roster, roster_detail = roster_agent.score(candidate)
             plan, plan_detail = draft_plan_agent.score(candidate)
+            scarcity, scarcity_detail = scarcity_agent.score(candidate)
             dynamics, dynamics_detail = dynamics_agent.score(candidate)
             opponent, opponent_detail = opponent_agent.score(candidate, state["nextUserPick"])
             risk, risk_detail = risk_agent.score(candidate)
@@ -1134,6 +1320,7 @@ class LiveDraftRecommendationEngine:
                 "value": value,
                 "rosterConstruction": roster,
                 "draftPlan": plan,
+                "positionScarcity": scarcity,
                 "draftDynamics": dynamics,
                 "opponentModel": opponent,
                 "riskNews": risk,
@@ -1149,6 +1336,7 @@ class LiveDraftRecommendationEngine:
                 value_detail,
                 roster_detail,
                 plan_detail,
+                scarcity_detail,
                 dynamics_detail,
                 risk_detail,
                 opponent_detail,
@@ -1186,6 +1374,7 @@ class LiveDraftRecommendationEngine:
                     "value": value_detail,
                     "rosterConstruction": roster_detail,
                     "draftPlan": plan_detail,
+                    "positionScarcity": scarcity_detail,
                     "draftDynamics": dynamics_detail,
                     "opponentModel": opponent_detail,
                     "scenario": scenario_detail,
@@ -1257,6 +1446,7 @@ class LiveDraftRecommendationEngine:
                 "playerValue": "rank, ADP value, and tiers",
                 "rosterConstruction": "starter, flex, Superflex, and depth requirements",
                 "draftPlan": "round-aware RB/WR roster construction preference",
+                "positionScarcity": "value over a league-sized replacement player",
                 "draftDynamics": "recent positional-run pressure",
                 "opponentModel": "uncalibrated ADP survival heuristic",
                 "riskNews": "sourced injury/news when supplied; missing means unknown",
@@ -1285,6 +1475,7 @@ class LiveDraftRecommendationEngine:
         value: Mapping[str, Any],
         roster: Mapping[str, Any],
         draft_plan: Mapping[str, Any],
+        scarcity: Mapping[str, Any],
         dynamics: Mapping[str, Any],
         risk: Mapping[str, Any],
         opponent: Mapping[str, Any],
@@ -1299,6 +1490,8 @@ class LiveDraftRecommendationEngine:
             roster["impact"],
             draft_plan["impact"],
         ]
+        if scarcity["method"] != "unavailable":
+            reasons.append(scarcity["impact"])
         if dynamics["runDetected"]:
             reasons.append(
                 f"a {candidate.position} run is active ({dynamics['recentPositionPicks']} of the last {dynamics['window']} picks)"

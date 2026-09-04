@@ -1942,6 +1942,8 @@ def test_dashboard_uses_shared_ui_contract_without_inline_or_remote_code() -> No
     assert "renderRecommendationView" in script
     assert "function renderScenarios(data, model)" in script
     assert "renderScenarios(data, model);" in script
+    assert "'positionScarcity'" in script
+    assert "<th>Scarcity</th>" in index
     assert "const model = render(data, leagueId);" in script
     assert "model?.mode === 'success' || model?.mode === 'degraded'" in script
     assert "visibleRecommendationCount" in script
