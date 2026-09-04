@@ -779,6 +779,160 @@ class FantasyProsProvider:
             )
         return result
 
+    async def warm_cache(self, *, year: int, scoring: str = "HALF") -> dict[str, Any]:
+        """Warm all draft evidence caches and return only bounded metadata."""
+
+        now = self._now()
+        normalized_scoring = self._normalize_projection_scoring(scoring)
+        request_year = self._bounded_year(year, now.year)
+        if normalized_scoring is None:
+            raise ValueError("scoring must be STD, HALF, or PPR")
+        dataset_names = ("players", "injuries", "news", "projections", "adp")
+        if not self._api_key:
+            unavailable = {
+                "status": "unavailable",
+                "recordCount": 0,
+                "fetchedAt": None,
+                "stale": False,
+                "refreshFailed": False,
+                "publicApiLimited": False,
+            }
+            return {
+                "status": "unavailable",
+                "provider": _PROVIDER,
+                "datasets": {name: dict(unavailable) for name in dataset_names},
+            }
+
+        include_catalog_adp = normalized_scoring in {"STD", "PPR"}
+        async with self._request_lock:
+            catalog = await self._safe_load(
+                "players",
+                {"ecr": "included"},
+                "players",
+                self._max_players,
+                self._player_cache_ttl_seconds,
+                (
+                    lambda raw: self._catalog_player(raw, include_adp=True)
+                    if include_catalog_adp
+                    else self._catalog_player(raw)
+                ),
+                response_scope=(
+                    {"season": request_year, "week": 0}
+                    if include_catalog_adp
+                    else None
+                ),
+            )
+            injuries = await self._safe_load(
+                "injuries",
+                {
+                    "year": request_year,
+                    "week": 0,
+                    "include_probabilities": "true",
+                },
+                "injuries",
+                self._max_injuries,
+                self._cache_ttl_seconds,
+                self._injury,
+            )
+            news = await self._safe_load(
+                "news",
+                {"limit": self._news_limit, "order_by": "updated"},
+                "items",
+                self._news_limit,
+                self._cache_ttl_seconds,
+                self._news,
+            )
+            projections = await self._safe_load(
+                f"{request_year}/projections",
+                {"week": 0, "positions": ":".join(_PROJECTION_POSITIONS)},
+                "players",
+                self._max_projections,
+                self._projection_cache_ttl_seconds,
+                lambda raw: self._projection(raw, normalized_scoring),
+                response_scope={
+                    "season": request_year,
+                    "week": 0,
+                    "scoring": normalized_scoring,
+                },
+            )
+            if normalized_scoring == "HALF":
+                adp = await self._safe_load(
+                    f"{request_year}/consensus-rankings",
+                    {
+                        "position": "ALL",
+                        "scoring": normalized_scoring,
+                        "type": "ADP",
+                        "week": 0,
+                    },
+                    "players",
+                    self._max_players,
+                    self._player_cache_ttl_seconds,
+                    self._adp_player,
+                )
+                adp_count = sum(isinstance(record, _AdpPlayer) for record in adp.records)
+            else:
+                adp = catalog
+                adp_count = sum(
+                    isinstance(record, _CatalogPlayer)
+                    and (
+                        record.adp_std
+                        if normalized_scoring == "STD"
+                        else record.adp_ppr
+                    )
+                    is not None
+                    for record in catalog.records
+                )
+
+        datasets = {
+            "players": self._warm_dataset_metadata(catalog, require_records=True),
+            "injuries": self._warm_dataset_metadata(injuries),
+            "news": self._warm_dataset_metadata(news),
+            "projections": self._warm_dataset_metadata(
+                projections, require_records=True
+            ),
+            "adp": self._warm_dataset_metadata(
+                adp,
+                record_count=adp_count,
+                require_records=True,
+            ),
+        }
+        available = sum(
+            item["status"] == "available" for item in datasets.values()
+        )
+        degraded = any(
+            item["status"] != "available"
+            or item["stale"] is True
+            or item["refreshFailed"] is True
+            for item in datasets.values()
+        )
+        return {
+            "status": (
+                "unavailable" if available == 0 else "degraded" if degraded else "success"
+            ),
+            "provider": _PROVIDER,
+            "datasets": datasets,
+        }
+
+    @staticmethod
+    def _warm_dataset_metadata(
+        result: _LoadResult,
+        *,
+        record_count: int | None = None,
+        require_records: bool = False,
+    ) -> dict[str, Any]:
+        normalized_count = len(result.records) if record_count is None else record_count
+        available = result.fetched_at is not None and (
+            normalized_count > 0 or not require_records
+        )
+        return {
+            "status": "available" if available else "unavailable",
+            "recordCount": normalized_count if available else 0,
+            "fetchedAt": _iso(result.fetched_at) if available else None,
+            "stale": result.stale if available else False,
+            "refreshFailed": result.refresh_failed,
+            "publicApiLimited": result.public_api_limited,
+        }
+
     @staticmethod
     def _normalize_projection_scoring(value: Any) -> str | None:
         if not isinstance(value, str):

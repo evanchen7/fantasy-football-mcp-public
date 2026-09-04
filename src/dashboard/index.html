@@ -11,6 +11,7 @@
     <script src="/draft-dashboard/shared/draft-cockpit.js" defer></script>
     <script src="/draft-dashboard/draft-profile-client.js" defer></script>
     <script src="/draft-dashboard/live-refresh.js" defer></script>
+    <script src="/draft-dashboard/provider-cache-client.js" defer></script>
     <script src="/draft-dashboard/app.js" defer></script>
   </head>
   <body>
@@ -22,7 +23,7 @@
       </div>
       <div class="privacy-badge" aria-label="Privacy status">
         <span class="privacy-dot" aria-hidden="true"></span>
-        Local only · no cache
+        Local only · no browser cache
       </div>
     </header>
 
@@ -179,6 +180,47 @@
           <span id="profile-source-detail">Recommendations require a league-bound ranking profile while Yahoo API access is unavailable.</span>
           <span id="profile-freshness">Source date unknown</span>
         </div>
+      </section>
+
+      <section id="provider-cache-panel" class="provider-cache-panel" aria-labelledby="provider-cache-title" aria-busy="false">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Local data maintenance</p>
+            <h2 id="provider-cache-title">Provider cache</h2>
+          </div>
+          <p class="hint">Inspect normalized cache counts or explicitly warm missing and expired FantasyPros and Sleeper data. The job honors freshness windows and uses local daily request reservations only for stale or missing FantasyPros data.</p>
+        </div>
+        <div class="provider-cache-controls">
+          <label>
+            <span>Projection scoring</span>
+            <select id="provider-cache-scoring" name="providerCacheScoring" disabled>
+              <option value="STD">Standard</option>
+              <option value="HALF" selected>Half PPR</option>
+              <option value="PPR">PPR</option>
+            </select>
+          </label>
+          <button id="provider-cache-refresh" type="button" class="secondary-button" aria-describedby="provider-cache-status" disabled>Refresh stats</button>
+          <button id="provider-cache-run" type="button" aria-describedby="provider-cache-status" disabled>Run cache job</button>
+        </div>
+        <div id="provider-cache-status" class="provider-cache-status loading" role="status" aria-live="polite">
+          Loading provider cache stats…
+        </div>
+        <div class="provider-cache-stats" aria-label="Provider cache statistics">
+          <article><span>Database</span><strong id="provider-cache-availability">—</strong></article>
+          <article><span>Snapshots</span><strong id="provider-cache-snapshot-count">—</strong></article>
+          <article><span>Cached records</span><strong id="provider-cache-record-count">—</strong></article>
+          <article><span>Database size</span><strong id="provider-cache-size">—</strong></article>
+          <article><span>Latest snapshot</span><strong id="provider-cache-latest">—</strong></article>
+          <article><span>FantasyPros local requests</span><strong id="provider-cache-budget">—</strong></article>
+        </div>
+        <p id="provider-cache-job-summary" class="provider-cache-job-summary">No cache job has been run from this dashboard.</p>
+        <details class="provider-cache-details">
+          <summary>Stored snapshot details</summary>
+          <ul id="provider-cache-snapshots" class="provider-cache-snapshots">
+            <li>Cache statistics are loading.</li>
+          </ul>
+        </details>
+        <p class="provider-cache-privacy">Only bounded dataset names, counts, freshness, and budget totals are shown. Player rows, database paths, credentials, and provider responses are never exposed here.</p>
       </section>
 
       <div id="request-status" class="request-status idle" role="status" aria-live="polite">
