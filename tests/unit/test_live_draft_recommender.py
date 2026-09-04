@@ -9,6 +9,7 @@ from src.agents.live_draft_recommender import (
     Candidate,
     DraftPlanAgent,
     LiveDraftRecommendationEngine,
+    PositionScarcityAgent,
     _same_player,
     reconcile_live_draft,
 )
@@ -35,6 +36,67 @@ def test_draft_plans_apply_distinct_early_round_position_preferences() -> None:
         [], "rb_heavy"
     ).score(wr)[0]
     assert DraftPlanAgent([], "best_available").score(qb)[0] == 50
+
+
+def test_position_scarcity_uses_projection_value_over_replacement_when_complete() -> None:
+    def projected(name: str, position: str, rank: int, points: float) -> Candidate:
+        return Candidate(
+            {
+                "projected_points": points,
+                "projection_source": "FantasyPros",
+                "projection_season": 2026,
+                "projection_scoring": "PPR",
+                "projection_stale": False,
+            },
+            name,
+            position,
+            "FA",
+            rank,
+            float(rank),
+        )
+
+    rb = projected("Top Runner", "RB", 1, 300)
+    wr = projected("Top Receiver", "WR", 2, 250)
+    agent = PositionScarcityAgent(
+        [
+            rb,
+            projected("Replacement Runner", "RB", 20, 100),
+            wr,
+            projected("Replacement Receiver", "WR", 10, 200),
+        ],
+        [{"position": "RB", "count": 1}, {"position": "WR", "count": 1}],
+        2,
+    )
+
+    rb_score, rb_detail = agent.score(rb)
+    wr_score, wr_detail = agent.score(wr)
+    assert rb_score > wr_score
+    assert rb_detail == {
+        "method": "projection-vorp",
+        "replacementPositionRank": 2,
+        "replacementProjectedPoints": 100.0,
+        "valueOverReplacement": 200.0,
+        "impact": "projects 200.0 points above the RB2 replacement level",
+    }
+    assert wr_detail["valueOverReplacement"] == 50
+
+
+def test_position_scarcity_falls_back_to_complete_ranking_depth() -> None:
+    rb = Candidate({}, "Top Runner", "RB", "FA", 1, 1)
+    wr = Candidate({}, "Top Receiver", "WR", "FA", 2, 2)
+    agent = PositionScarcityAgent(
+        [
+            rb,
+            Candidate({}, "Replacement Runner", "RB", "FA", 30, 30),
+            wr,
+            Candidate({}, "Replacement Receiver", "WR", "FA", 10, 10),
+        ],
+        [{"position": "RB", "count": 1}, {"position": "WR", "count": 1}],
+        2,
+    )
+
+    assert agent.score(rb)[0] > agent.score(wr)[0]
+    assert agent.score(rb)[1]["method"] == "ranking-depth"
 
 
 def live_context() -> dict:
@@ -516,6 +578,7 @@ def test_full_suite_returns_specialists_scenario_critic_and_contingency() -> Non
         "value",
         "rosterConstruction",
         "draftPlan",
+        "positionScarcity",
         "draftDynamics",
         "opponentModel",
         "riskNews",
